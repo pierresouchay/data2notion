@@ -1,0 +1,56 @@
+[project]
+name = "data2notion"
+dynamic = ["version"]
+
+authors = [
+  { name="Pierre Souchay", email="pierre@souchay.net" },
+]
+description = "Synchronize your data with a Notion database"
+readme = "README.md"
+repository = "https://github.com/pierresouchay/prom2csv/issues"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "notion-client",
+    "python-dateutil",
+]
+
+[project.scripts]
+prom2csv = "data2notion.main:main"
+
+[project.urls]
+Homepage = "https://github.com/pierresouchay/prom2csv"
+Issues = "https://github.com/pierresouchay/prom2csv/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/data2notion/main.py"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src"]
+sources = ["src"]
+# Note that we change the behaviour of this flag below
+macos-max-compat = true
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.9"
+
+[tool.ruff]
+line-length = 88
+# Assume Python 3.9+
+target-version = "py39"
