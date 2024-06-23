@@ -1,10 +1,12 @@
 import argparse
 import csv
 import sys
-from typing import Iterable, Optional, TextIO
+from typing import Iterable, TextIO
+
+from data2notion.serialization import NotionType
 
 from . import __plugins__version__
-from .plugin import Plugin, PluginInfo, PluginInstance, SourcePropertyType, SourceRecord
+from .plugin import Plugin, PluginInfo, PluginInstance, SourceRecord
 
 
 class CSVPluginInstance(PluginInstance):
@@ -27,10 +29,18 @@ class CSVPluginInstance(PluginInstance):
         assert self.reader.fieldnames
         self.props = set(self.reader.fieldnames)
 
-    def get_property_type(self, prop_name: str) -> Optional[SourcePropertyType]:
-        if prop_name in self.props:
-            return SourcePropertyType.STR
-        return None
+    def supports_property(
+        self,
+        prop_name: str,
+        notion_type: NotionType,
+        first_record: SourceRecord,
+    ) -> bool:
+        return (
+            self.get_property_as_canonical_value(
+                rec=first_record, prop_name=prop_name, notion_type=notion_type
+            )
+            is not None
+        )
 
     def values(self) -> Iterable[SourceRecord]:
         for row in self.reader:
@@ -57,7 +67,7 @@ class CSVPlugin(Plugin):
         return PluginInfo(
             name="csv",
             author="Pierre Souchay",
-            description="Read CSV Files",
+            description="Write to Notion DB from a CSV file",
             version=__plugins__version__,
         )
 

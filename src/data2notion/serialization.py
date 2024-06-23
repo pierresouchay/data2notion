@@ -1,42 +1,49 @@
+import datetime as dt
 import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Optional, TypeVar, Union
 
-from dateutil import parser
+
+class NotionCanonicalRepr(str, Enum):
+    array = list
+    boolean = bool
+    datetime = dt.datetime
+    number_r = float
+    person = "person"
+    relation_r = "relation"
+    string = str
 
 
-class NotionType(str, Enum):
-    checkbox = "checkbox"
-    created_by = "created_by"
-    created_time = "created_time"
-    date = "date"
-    email = "email"
-    files = "files"
-    formula = "formula"
-    last_edited_by = "last_edited_by"
-    last_edited_time = "last_edited_time"
-    multi_select = "multi_select"
-    number = "number"
-    people = "people"
-    phone_number = "phone_number"
-    relation = "relation"
-    rich_text = "rich_text"
-    rollup = "rollup"
-    select = "select"
-    status = "status"
-    title_id = "title"
-    unique_id = "unique_id"
-    url = "url"
+class NotionType(Enum):
+    checkbox = ("checkbox", NotionCanonicalRepr.boolean)
+    created_by = ("created_by", NotionCanonicalRepr.person)
+    created_time = ("created_time", NotionCanonicalRepr.datetime)
+    date = ("date", NotionCanonicalRepr.datetime)
+    email = ("email", NotionCanonicalRepr.string)
+    files = ("files", NotionCanonicalRepr.array)
+    formula = ("formula", NotionCanonicalRepr.string)
+    last_edited_by = ("last_edited_by", NotionCanonicalRepr.person)
+    last_edited_time = ("last_edited_time", NotionCanonicalRepr.datetime)
+    multi_select = ("multi_select", NotionCanonicalRepr.array)
+    number = ("number", NotionCanonicalRepr.number_r)
+    people = ("people", NotionCanonicalRepr.person)
+    phone_number = ("phone_number", NotionCanonicalRepr.string)
+    relation = ("relation", NotionCanonicalRepr.relation_r)
+    rich_text = ("rich_text", NotionCanonicalRepr.string)
+    rollup = ("rollup", NotionCanonicalRepr.string)
+    select = ("select", NotionCanonicalRepr.string)
+    status = ("status", NotionCanonicalRepr.string)
+    title = ("title", NotionCanonicalRepr.string)
+    unique_id = ("unique_id", NotionCanonicalRepr.number_r)
+    url = ("url", NotionCanonicalRepr.string)
 
     def __repr__(self) -> str:
-        return self.value
+        return self.value[0]
 
 
-def str_to_notion_type(val: str) -> NotionType:
-    if val == "title":
-        val = "title_id"
+def notion_type_from_str(val: str) -> NotionType:
     nt = getattr(NotionType, val)
     assert isinstance(nt, NotionType)
     return nt
@@ -159,9 +166,19 @@ serialization_writers = {
     NotionType.phone_number: no_op,
     NotionType.rich_text: write_to_notion_rich_text,
     NotionType.select: lambda a: {"name": a.replace(",", " ")} if a else None,
-    NotionType.title_id: write_to_notion_rich_text,
+    NotionType.title: write_to_notion_rich_text,
     NotionType.url: no_op,
 }
+
+
+def serialize_for_notion_write(val: Any, notion_type: NotionType) -> Optional[Any]:
+    if val is None:
+        return None
+    serializer = serialization_writers.get(notion_type)
+    vx = str(val)
+    if serializer is None:
+        return vx
+    return serializer(vx)
 
 
 def read_rollup(rollup: Any) -> Any:
@@ -176,7 +193,7 @@ def read_rollup(rollup: Any) -> Any:
             raise AssertionError(
                 f"prop is supposed to be a dict, but was {type(the_array)}: {the_array}"
             )
-        return [get_value(val) for val in the_array]
+        return [get_canonical_value_from_notion(val) for val in the_array]
     if subtype in ["number"]:
         return rollup[subtype]
     if subtype == "date":
@@ -200,7 +217,7 @@ def read_unique_id(prop: Any) -> str:
     return f"{prop['prefix']}-{prop['number']}"
 
 
-serialization_readers: dict[str, Callable[[Any], Any]] = {
+serialization_readers: dict[NotionType, Callable[[Any], Any]] = {
     NotionType.checkbox: read_bool,
     NotionType.created_by: read_by_id,
     NotionType.created_time: read_date,
@@ -219,7 +236,7 @@ serialization_readers: dict[str, Callable[[Any], Any]] = {
     NotionType.rollup: read_rollup,
     NotionType.select: read_by_name,
     NotionType.status: read_by_name,
-    NotionType.title_id: read_from_rich_text,
+    NotionType.title: read_from_rich_text,
     NotionType.unique_id: read_unique_id,
     NotionType.url: no_op,
 }
@@ -233,14 +250,15 @@ def convert_value_to_notion(prop_type: NotionType, val: Any) -> Any:
         raise ValueError(f"Unknown type: {prop_type}") from kerr
 
 
-def get_value(prop: dict[str, Any]) -> Any:
+def get_canonical_value_from_notion(prop: dict[str, Any]) -> Any:
     prop_type = prop["type"]
     assert prop_type
     try:
         val = prop[prop_type]
         if val is None:
             return None
-        res = serialization_readers[prop_type](val)
+        serial_id = notion_type_from_str(prop_type)
+        res = serialization_readers[serial_id](val)
         if isinstance(res, list):
             return tuple(res)
         return res
@@ -249,29 +267,27 @@ def get_value(prop: dict[str, Any]) -> Any:
         raise
 
 
-def serialize_canonical(field: Any, type_hint: NotionType) -> Union[str, bool]:
-    if type_hint == NotionType.number:
-        x = write_number_canonic(field)
-        return "" if x is None else str(x)
-    if type_hint == NotionType.checkbox:
-        return str_to_bool(field)
-    if type_hint == NotionType.date and isinstance(field, str) and field:
-        try:
-            return (
-                parser.parse(field)
-                .replace(second=0, microsecond=0)
-                .strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
-            )
-        except ValueError:
-            print(f"[WARN]: failed to serialize datetime {field}")
-            return field
+def basic_type_to_str(
+    field: Optional[Union[str, list, tuple, dt.datetime, bool]],
+) -> str:
     if field is None:
         return ""
     if isinstance(field, (list, tuple)):
         return "\n".join([str(f) if f else "" for f in field])
     if isinstance(field, bool):
         return "true" if field else "false"
-    return truncate_large_value(str(field))
+    if isinstance(field, (dt.datetime, dt.date)):
+        return field.isoformat()
+    return str(field)
+
+
+def serialize_canonical_from_source(
+    field: Optional[Union[str, list, tuple, dt.datetime, bool]], notion_type: NotionType
+) -> str:
+    val = basic_type_to_str(field=field)
+    if notion_type in [NotionType.select, NotionType.multi_select]:
+        return "\n".join(map(lambda v: v[0:100].replace(",", "_"), val.split("\n")))
+    return truncate_large_value(str(val))
 
 
 def read_canonical_from_notion(
@@ -280,4 +296,4 @@ def read_canonical_from_notion(
     serializer = serialization_readers.get(notion_type)
     if serializer is None:
         serializer = no_op
-    return serializer(notion_prop[notion_type.value])
+    return serializer(notion_prop[notion_type.name])
