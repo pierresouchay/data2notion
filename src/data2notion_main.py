@@ -34,6 +34,8 @@ class Statistic:
         self.name = name
         self.count = 0
         self.seconds = 0.0
+        # runnings handle re-entrant with (since we are in async mode)
+        self._runnings: list[float] = []
 
     def increment(self, duration_seconds: float) -> None:
         self.count += 1
@@ -44,10 +46,10 @@ class Statistic:
         self.seconds = duration_seconds
 
     def __enter__(self) -> None:
-        self.start = time.perf_counter()
+        self._runnings.append(time.perf_counter())
 
     def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
-        self.increment(time.perf_counter() - self.start)
+        self.increment(time.perf_counter() - self._runnings.pop())
 
     def __repr__(self) -> str:
         res = f"{self.name:<16}: {self.count:>4} in {round(self.seconds, 1)}s"
@@ -175,7 +177,7 @@ class NotionRecord:
 
 class NotionDataBaseInfo:
     def __init__(self, retrieve_db_info: dict[str, Any]):
-        self.properties: dict[str, str] = dict()
+        self.properties: dict[str, str] = {}
         self.title = ""
         for k, v in retrieve_db_info.get("properties", {}).items():
             if k:
@@ -196,7 +198,6 @@ class NotionProcessor:
         self.db_info = NotionDataBaseInfo(db_info)
 
     async def iterate_over_pages(self) -> AsyncGenerator[NotionRecord, None]:
-        t0 = time.perf_counter()
         num_notion_records = 0
         async for rec in async_iterate_paginated_api(
             self.notion.databases.query, database_id=self.database_id
@@ -204,7 +205,6 @@ class NotionProcessor:
             num_notion_records += 1
             assert isinstance(rec, dict)
             yield NotionRecord(rec)
-        stats.notion_records.set(num_notion_records, time.perf_counter() - t0)
 
     def close(self) -> None:
         asyncio.run(self.notion.aclose())
@@ -218,7 +218,7 @@ class SourceRecordCanonical:
         fields_to_dump: dict[str, NotionType],
     ):
         self.source_identifier = source_record.source_identifier
-        self.props: dict[str, Any] = dict()
+        self.props: dict[str, Any] = {}
         for prop_name, notion_type in fields_to_dump.items():
             val = plugin.get_property_as_canonical_value(
                 source_record, prop_name=prop_name, notion_type=notion_type
@@ -232,11 +232,10 @@ def parse_source(
     title_in_notion: str,
     fields_intersection: dict[str, NotionType],
 ) -> tuple[dict[str, list[SourceRecordCanonical]], int]:
-    indexed_source_records: dict[str, list[SourceRecordCanonical]] = dict()
+    indexed_source_records: dict[str, list[SourceRecordCanonical]] = {}
     title_in_source = ""
     rows_count = 0
     try:
-        t0 = time.perf_counter()
         plugin.setup_from_notion(
             title_in_notion, fields_intersection=fields_intersection
         )
@@ -277,7 +276,6 @@ def parse_source(
                     lst = []
                     indexed_source_records[idx] = lst
                 lst.append(rec)
-        stats.source_records.set(rows_count, time.perf_counter() - t0)
         return (indexed_source_records, rows_count)
     finally:
         plugin.close()
@@ -288,7 +286,8 @@ def pop_best_candidate(
 ) -> SourceRecordCanonical:
     if len(candidates) == 1:
         return candidates.pop()
-    # TODO: compare with notion_rec
+    assert notion_rec
+    # TODO: We could optimize this by finding similarities
     return candidates.pop()
 
 
@@ -313,18 +312,10 @@ class PageToRemove(NotionPageModification):
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
-        t0 = time.perf_counter()
-        try:
+        with stats.records_removed:
             await notion_processor.notion.pages.update(
                 page_id=self.page_id, archived=True
             )
-            stats.records_removed.increment(time.perf_counter() - t0)
-        except APIResponseError as err:
-            if err.code in [APIErrorCode.ValidationError]:
-                # for some reason, it sometimes was already archived... ignore the error
-                if "Can't edit block that is archived" in str(err):
-                    return str(self)
-            raise err
         return str(self)
 
 
@@ -341,18 +332,19 @@ class PageToUpdate(NotionPageModification):
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
-        t0 = time.perf_counter()
-        payload = dict()
-        for k, old_and_new_val in self.updates.items():
-            prop_type_str = notion_processor.db_info.properties[k]
-            prop_type = notion_type_from_str(prop_type_str)
-            payload[k] = {
-                prop_type.name: convert_value_to_notion(prop_type, old_and_new_val[1])
-            }
-        await notion_processor.notion.pages.update(
-            page_id=self.page_id, archived=False, properties=payload
-        )
-        stats.records_updated.increment(time.perf_counter() - t0)
+        with stats.records_updated:
+            payload = {}
+            for k, old_and_new_val in self.updates.items():
+                prop_type_str = notion_processor.db_info.properties[k]
+                prop_type = notion_type_from_str(prop_type_str)
+                payload[k] = {
+                    prop_type.name: convert_value_to_notion(
+                        prop_type, old_and_new_val[1]
+                    )
+                }
+            await notion_processor.notion.pages.update(
+                page_id=self.page_id, archived=False, properties=payload
+            )
         return str(self)
 
 
@@ -366,16 +358,15 @@ class PageToAdd(NotionPageModification):
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
-        t0 = time.perf_counter()
-        payload = dict()
-        for k, value in self.props_to_add.items():
-            prop_type_str = notion_processor.db_info.properties[k]
-            prop_type = notion_type_from_str(prop_type_str)
-            payload[k] = {prop_type.name: convert_value_to_notion(prop_type, value)}
-        await notion_processor.notion.pages.create(
-            parent={"database_id": notion_processor.database_id}, properties=payload
-        )
-        stats.records_added.increment(time.perf_counter() - t0)
+        with stats.records_added:
+            payload = {}
+            for k, value in self.props_to_add.items():
+                prop_type_str = notion_processor.db_info.properties[k]
+                prop_type = notion_type_from_str(prop_type_str)
+                payload[k] = {prop_type.name: convert_value_to_notion(prop_type, value)}
+            await notion_processor.notion.pages.create(
+                parent={"database_id": notion_processor.database_id}, properties=payload
+            )
         return str(self)
 
 
@@ -384,7 +375,7 @@ def find_diffs(
     source_record: SourceRecordCanonical,
     fields_to_compare: dict[str, NotionType],
 ) -> dict[str, tuple[Any, Any]]:
-    res: dict[str, tuple[Any, Any]] = dict()
+    res: dict[str, tuple[Any, Any]] = {}
     for k, v in fields_to_compare.items():
         assert v
         notion_val = notion_record.get_canonical(k)
@@ -397,7 +388,7 @@ def find_diffs(
 def generate_modifiable_fields_from_notion(
     properties_in_notion: dict[str, str],
 ) -> dict[str, NotionType]:
-    res: dict[str, NotionType] = dict()
+    res: dict[str, NotionType] = {}
     for k, v in properties_in_notion.items():
         if k in {"created_by", "created_at", "last_edited_by", "last_edited_at"}:
             continue
@@ -426,14 +417,16 @@ async def find_changes(
         title_in_notion=title_in_notion,
         fields_intersection=fields_intersection,
     )
-    t1 = time.perf_counter()
+    stats.source_records.set(rows_count_in_source, time.perf_counter() - t0)
     logger.info(
-        "read %d records from source in %.1fs", rows_count_in_source, round(t1 - t0, 1)
+        "read %d records from source in %.1fs",
+        stats.source_records.count,
+        round(stats.source_records.seconds, 1),
     )
-    t0 = t1
-    rows_count_in_notion = 0
+    t0 = time.perf_counter()
+    num_notion_records = 0
     async for notion_rec in notion_processor.iterate_over_pages():
-        rows_count_in_notion += 1
+        num_notion_records += 1
         title = notion_rec.get_canonical(title_in_notion)
         if title is None:
             title = ""
@@ -454,13 +447,12 @@ async def find_changes(
             if res:
                 yield PageToUpdate(notion_rec.id, res)
         else:
-            to_remove = PageToRemove(notion_rec.id, title=title)
-            yield to_remove
-    t1 = time.perf_counter()
+            yield PageToRemove(notion_rec.id, title=title)
+    stats.notion_records.set(num_notion_records, time.perf_counter() - t0)
     logger.info(
         "Processed %d records from Notion in %.1fs",
-        rows_count_in_notion,
-        round(t1 - t0, 1),
+        stats.notion_records.count,
+        round(stats.notion_records.seconds, 1),
     )
     for pages_with_same_title in indexed_source_records.values():
         for new_page in pages_with_same_title:

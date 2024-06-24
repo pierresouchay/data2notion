@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any, Callable, Optional, TypeVar, Union
 
 
+# pylint: disable=invalid-name
 class NotionCanonicalRepr(str, Enum):
     array = list
     boolean = bool

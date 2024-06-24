@@ -19,7 +19,7 @@ class CSVPluginInstance(PluginInstance):
 
             self.on_stream_end = flush_stdout
         else:
-            self.fd = open(file, "rt", encoding="utf8")
+            self.fd = open(file, "rt", encoding="utf8")  # pylint: disable=R1732
 
             def close_file(out: TextIO) -> None:
                 out.close()
@@ -51,7 +51,7 @@ class CSVPluginInstance(PluginInstance):
         self.on_stream_end(self.fd)
 
 
-class excel_with_semi_colon(csv.excel):
+class excel_with_semi_colon(csv.excel):  # pylint: disable=C0103
     delimiter = ";"
 
 

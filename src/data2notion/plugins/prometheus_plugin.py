@@ -13,7 +13,7 @@ from .plugin import Plugin, PluginInfo, PluginInstance, SourceRecord
 
 
 class PrometheusPluginInstance(PluginInstance):
-    def __init__(
+    def __init__(  # pylint: disable=R0913
         self,
         prometheus_url: str,
         query: str,
@@ -53,9 +53,9 @@ class PrometheusPluginInstance(PluginInstance):
     def setup_from_notion(
         self, notion_title_name: str, fields_intersection: dict[str, NotionType]
     ) -> None:
-        for notion_id, notion_type in fields_intersection.items():
-            if notion_type == NotionType.title:
-                self.mappings["__notion_row_id__"] = notion_title_name
+        assert notion_title_name
+        assert fields_intersection
+        self.mappings["__notion_row_id__"] = notion_title_name
 
     def supports_property(
         self,
@@ -91,7 +91,7 @@ class PrometheusPluginInstance(PluginInstance):
 
         available_labels = dict(result)
         available_labels["labels_str"] = labels_str
-        return eval(self.evaluation, None, available_labels)
+        return eval(self.evaluation, None, available_labels)  # pylint: disable=eval-used
 
     def values(self) -> Iterable[SourceRecord]:
         for idx, result in enumerate(self.results):

@@ -14,7 +14,7 @@ class JSONPluginInstance(PluginInstance):
         if file == "-":
             fd = sys.stdin
         else:
-            fd = open(file, "rt", encoding="utf8")
+            fd = open(file, "rt", encoding="utf8")  # pylint: disable=R1732
         try:
             data = json.load(fd)
             for p in path_in_json.split("."):
