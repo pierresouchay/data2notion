@@ -1,5 +1,8 @@
 # data2notion: export your data to Notion
 
+[![PyPI - Version](https://img.shields.io/pypi/v/data2notion)](https://pypi.org/project/data2notion/)
+[![License](https://img.shields.io/pypi/l/data2notion)](https://raw.githubusercontent.com/pierresouchay/data2notion/main/LICENSE)
+
 This tool is intended for exporting various data from 3rd party systems
 into Notion. If you tool can export some records, then you can make this data available to Notion!
 
