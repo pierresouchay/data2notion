@@ -11,6 +11,9 @@ Sink.
 Plugins can be written to use Notion as a frontend to the source, very helpfull
 to comment, annotate data from various systems.
 
-## Plugins
+## Writing Plugins
 
-Plugins provide ways to access the data from the so
+Writing plugins is described in the [src/plugins/plugin.py](src/plugins/plugin.py) source
+code, it explains what to re-implement and how.
+
+Several examples are also available in [src/plugins/](src/plugins/) directory.

@@ -6,6 +6,22 @@
 This tool is intended for exporting various data from 3rd party systems
 into Notion. If you tool can export some records, then you can make this data available to Notion!
 
+## Installation
+
+It requires Python 3.9+ and try not using too many dependencies.
+
+to install it:
+
+```bash
+python3 install data2notion
+```
+
+This will install it and all plugins. You can now run it by typing `data2notion` in you terminal.
+
+## Changes
+
+[CHANGELOG.md](https://github.com/pierresouchay/data2notion/blob/main/CHANGELOG.md)
+
 ## Goals
 
 When working as a CTO, I had the need to expose data from various systems (Applications, AWS, SIEM, Active Directory, users, groups...)
@@ -108,7 +124,8 @@ options:
 ```
 
 
-## Creating you own plugins
+## Adding other plugins
+
 
 Adding plugin can be done using environment variable `$DATA2NOTION_ADDITIONAL_PLUGINS` which support the
 following syntax `python_module.python_file:PluginClass`, thus to enable a new imaginary Bugzilla plugin, you might for instance
@@ -124,4 +141,8 @@ data2notion plugins
 ```
 
 and you might use it as any other plugin.
+
+## Writing new plugins
+
+See [DESIGN.md](https://github.com/pierresouchay/data2notion/blob/main/DESIGN.md).
 
