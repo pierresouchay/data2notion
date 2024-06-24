@@ -49,6 +49,49 @@ from a 3rd party API.
 
 ## Basic Usage
 
+data2notion is build using commands. Each succession of command has its own help.
+
+The first level is teh following:
+
+```bash
+data2notion --help
+usage: data2notion [-h] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--statistics {console,disabled}] [--notion-token NOTION_TOKEN] {plugins,write-to-notion} ...
+
+Export some data into a notion database
+
+options:
+  -h, --help            show this help message and exit
+  --log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}
+                        Set the log level (default=WARNING)
+  --statistics {console,disabled}
+                        Display Statistics when program ends
+  --notion-token NOTION_TOKEN
+                        Notion Token to use $NOTION_TOKEN by default
+
+action to perform:
+  action to perform
+
+  {plugins,write-to-notion}
+                        sub-command help
+    write-to-notion     write to Notion Database
+```
+
+This is the level where you can specify using the command line the `NOTION_TOKEN` (or you can use the environemnt variable `$NOTION_TOKEN` instead).
+
+You can also change the log-level (in case of issues) and enable/disable statistics.
+
+### First level of help
+
+How to get the _notion_database_id_?
+
+From [official documentation](https://developers.notion.com/reference/retrieve-a-database), open the database in your brower (in a full page),
+the URL should then be https://notion.so/my_workspace/**668d797c76fa49349b05ad288df2d136**v=... => in such an example, `668d797c76fa49349b05ad288df2d136`
+would be the _notion_database_id_.
+
+Be sure that you [granted access rights to this database](https://www.notion.so/help/add-and-manage-connections-with-the-api#add-connections-to-pages)
+to the token you want to use in this app.
+
+
 ```bash
 data2notion write-to-notion <notion_database_id> <plugin> --help
 ```
@@ -79,7 +122,7 @@ options:
 Export some JSON arrays in Notion.
 
 ```bash
-usage: data2notion write-to-notion notion_database_id json [-h] [--json-path PATH_IN_JSON] json_file
+usage: data2notion write-to-notion <notion_database_id> json [-h] [--json-path PATH_IN_JSON] json_file
 
 Write to Notion DB from a JSON file containing an array
 
@@ -96,8 +139,10 @@ options:
 
 Export metrics from prometheus (lastest values only) in Notion database.
 
+Inspired by [prom2csv](https://pypi.org/project/prom2csv/), this plugin let you export your last prometheus metrics in Notion!
+
 ```bash
-usage: main.py write-to-notion notion_database_id prometheus [-h] [--prometheus-url PROMETHEUS_URL]
+usage: data2notion write-to-notion <notion_database_id> prometheus [-h] [--prometheus-url PROMETHEUS_URL]
                                                              [--column-name-mapping COLUMN_NAME_MAPPING COLUMN_NAME_MAPPING]
                                                              [--row-id-expression ROW_ID_EXPRESSION] [--remove-column REMOVE_COLUMN]
                                                              query
