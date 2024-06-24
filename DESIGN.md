@@ -13,7 +13,7 @@ to comment, annotate data from various systems.
 
 ## Writing Plugins
 
-Writing plugins is described in the [src/plugins/plugin.py](src/plugins/plugin.py) source
+Writing plugins is described in the [src/data2notion/plugins/plugin.py](src/data2notion/plugins/plugin.py) source
 code, it explains what to re-implement and how.
 
-Several examples are also available in [src/plugins/](src/plugins/) directory.
+Several examples are also available in [src/data2notion/plugins/](src/data2notion/plugins/) directory.
