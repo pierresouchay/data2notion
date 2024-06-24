@@ -23,9 +23,59 @@ from data2notion.serialization import (
 
 logger = logging.getLogger("data2notion")
 
+
 __version__ = "1.0.0"
 
 __plugin_api_version__ = 1.0
+
+
+class Statistic:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.count = 0
+        self.seconds = 0.0
+
+    def increment(self, duration_seconds: float) -> None:
+        self.count += 1
+        self.seconds += duration_seconds
+
+    def set(self, count: int, duration_seconds: float) -> None:
+        self.count += count
+        self.seconds = duration_seconds
+
+    def __enter__(self) -> None:
+        self.start = time.perf_counter()
+
+    def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
+        self.increment(time.perf_counter() - self.start)
+
+    def __repr__(self) -> str:
+        res = f"{self.name:<16}: {self.count:>4} in {round(self.seconds, 1)}s"
+        if self.count > 0:
+            res += f" ({round(self.count / self.seconds, 1):<4}/s)"
+        return res
+
+
+class Statistics:
+    def __init__(self) -> None:
+        self.load_plugins = Statistic("load_plugins")
+        self.notion_records = Statistic("notion_records")
+        self.source_records = Statistic("source_records")
+        self.records_added = Statistic("record_added")
+        self.records_removed = Statistic("records_removed")
+        self.records_updated = Statistic("records_updated")
+
+    def __repr__(self) -> str:
+        return "\n".join(
+            [
+                f" - {str(getattr(self, attr))}"
+                for attr in dir(self)
+                if not attr.startswith("__")
+            ]
+        )
+
+
+stats = Statistics()
 
 
 def available_plugins() -> Iterable[Plugin]:
@@ -35,14 +85,18 @@ def available_plugins() -> Iterable[Plugin]:
         "plugins.json_plugin:JSONPlugin",
         "plugins.prometheus_plugin:PrometheusPlugin",
     ]:
-        plugin_spec = plugin_spec.strip()
-        if not plugin_spec:
-            continue
-        pkg, clz_name = plugin_spec.split(":")
-        clz = __import__(
-            pkg, globals={"__name__": "data2notion.main"}, fromlist=[clz_name], level=1
-        )
-        yield getattr(clz, clz_name)()
+        with stats.load_plugins:
+            plugin_spec = plugin_spec.strip()
+            if not plugin_spec:
+                continue
+            pkg, clz_name = plugin_spec.split(":")
+            clz = __import__(
+                pkg,
+                globals={"__name__": "data2notion.main"},
+                fromlist=[clz_name],
+                level=1,
+            )
+            yield getattr(clz, clz_name)()
 
 
 def display_plugins() -> None:
@@ -142,11 +196,15 @@ class NotionProcessor:
         self.db_info = NotionDataBaseInfo(db_info)
 
     async def iterate_over_pages(self) -> AsyncGenerator[NotionRecord, None]:
+        t0 = time.perf_counter()
+        num_notion_records = 0
         async for rec in async_iterate_paginated_api(
             self.notion.databases.query, database_id=self.database_id
         ):
+            num_notion_records += 1
             assert isinstance(rec, dict)
             yield NotionRecord(rec)
+        stats.notion_records.set(num_notion_records, time.perf_counter() - t0)
 
     def close(self) -> None:
         asyncio.run(self.notion.aclose())
@@ -178,6 +236,7 @@ def parse_source(
     title_in_source = ""
     rows_count = 0
     try:
+        t0 = time.perf_counter()
         plugin.setup_from_notion(
             title_in_notion, fields_intersection=fields_intersection
         )
@@ -199,7 +258,7 @@ def parse_source(
                     rec=rec_raw, title_in_notion=title_in_notion
                 ).strip()
                 logger.info(
-                    "Will compare on fields %s",
+                    "Comparing source/notion fields: %s",
                     ",".join(sorted(fields_intersection.keys())),
                 )
 
@@ -218,6 +277,7 @@ def parse_source(
                     lst = []
                     indexed_source_records[idx] = lst
                 lst.append(rec)
+        stats.source_records.set(rows_count, time.perf_counter() - t0)
         return (indexed_source_records, rows_count)
     finally:
         plugin.close()
@@ -253,10 +313,12 @@ class PageToRemove(NotionPageModification):
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
+        t0 = time.perf_counter()
         try:
             await notion_processor.notion.pages.update(
                 page_id=self.page_id, archived=True
             )
+            stats.records_removed.increment(time.perf_counter() - t0)
         except APIResponseError as err:
             if err.code in [APIErrorCode.ValidationError]:
                 # for some reason, it sometimes was already archived... ignore the error
@@ -279,6 +341,7 @@ class PageToUpdate(NotionPageModification):
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
+        t0 = time.perf_counter()
         payload = dict()
         for k, old_and_new_val in self.updates.items():
             prop_type_str = notion_processor.db_info.properties[k]
@@ -289,6 +352,7 @@ class PageToUpdate(NotionPageModification):
         await notion_processor.notion.pages.update(
             page_id=self.page_id, archived=False, properties=payload
         )
+        stats.records_updated.increment(time.perf_counter() - t0)
         return str(self)
 
 
@@ -302,6 +366,7 @@ class PageToAdd(NotionPageModification):
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
+        t0 = time.perf_counter()
         payload = dict()
         for k, value in self.props_to_add.items():
             prop_type_str = notion_processor.db_info.properties[k]
@@ -310,6 +375,7 @@ class PageToAdd(NotionPageModification):
         await notion_processor.notion.pages.create(
             parent={"database_id": notion_processor.database_id}, properties=payload
         )
+        stats.records_added.increment(time.perf_counter() - t0)
         return str(self)
 
 
@@ -364,7 +430,10 @@ async def find_changes(
     logger.info(
         "read %d records from source in %.1fs", rows_count_in_source, round(t1 - t0, 1)
     )
+    t0 = t1
+    rows_count_in_notion = 0
     async for notion_rec in notion_processor.iterate_over_pages():
+        rows_count_in_notion += 1
         title = notion_rec.get_canonical(title_in_notion)
         if title is None:
             title = ""
@@ -387,6 +456,12 @@ async def find_changes(
         else:
             to_remove = PageToRemove(notion_rec.id, title=title)
             yield to_remove
+    t1 = time.perf_counter()
+    logger.info(
+        "Processed %d records from Notion in %.1fs",
+        rows_count_in_notion,
+        round(t1 - t0, 1),
+    )
     for pages_with_same_title in indexed_source_records.values():
         for new_page in pages_with_same_title:
             yield PageToAdd(
@@ -411,7 +486,7 @@ async def consume_updates(q: asyncio.Queue[Union[object, Awaitable[Any]]]) -> No
 async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
-) -> None:
+) -> int:
     num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "10"))
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]] = asyncio.Queue(
         maxsize=num_concurrent
@@ -419,7 +494,6 @@ async def start_processing(
     consumers = [
         asyncio.create_task(consume_updates(queue)) for _ in range(num_concurrent)
     ]
-    t0 = time.perf_counter()
     updates = 0
     async for f in find_changes(plugin=plugin, notion_processor=notion_processor):
         updates += 1
@@ -430,20 +504,30 @@ async def start_processing(
     for _ in range(num_concurrent):
         await queue.put(STOP_FETCHING)
     await asyncio.gather(*consumers)
-    t1 = time.perf_counter()
-    print(f"[DONE] synchronized, {updates} changes in {round(t1 - t0)}s")
+    return updates
+
+
+_LOGGER_LEVELS = ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
+
+
+_STATS_IN_CONSOLE = "console"
 
 
 def main() -> int:
-    logging.getLogger().setLevel(logging.INFO)
     parser = argparse.ArgumentParser(
         description="Export some data into a notion database"
     )
     parser.add_argument(
         "--log-level",
-        help="Set the log level (default=WARN)",
-        choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"],
+        help="Set the log level (default=WARNING)",
+        choices=_LOGGER_LEVELS,
         default="WARNING",
+    )
+    parser.add_argument(
+        "--statistics",
+        help="Display Statistics when program ends",
+        choices=[_STATS_IN_CONSOLE, "disabled"],
+        default=_STATS_IN_CONSOLE,
     )
     parser.add_argument(
         "--notion-token",
@@ -487,21 +571,38 @@ def main() -> int:
             plugin.register_in_parser(p_plugin)
 
     ns = parser.parse_args()
-    logging.getLogger().setLevel(ns.log_level)
-    if not hasattr(ns, "feat"):
-        parser.print_help()
-        return 0
-    if callable(ns.feat):
-        ns.feat()
-        return 0
-    else:
-        assert isinstance(ns.feat, Plugin)
-        plugin_instance = ns.feat.start_parsing(ns)
-        notion_processor = NotionProcessor(ns.notion_database_id, ns.notion_token)
-        asyncio.run(
-            start_processing(plugin_instance, notion_processor=notion_processor)
-        )
-        return 0
+    logging.basicConfig(
+        level=getattr(logging, ns.log_level),
+        format="%(asctime)s [%(levelname)5s][%(name)11s] %(message)s",
+        force=True,
+    )
+    try:
+        if not hasattr(ns, "feat"):
+            parser.print_help()
+            return 0
+        if callable(ns.feat):
+            ns.feat()
+        else:
+            assert isinstance(ns.feat, Plugin)
+
+            async def run_all() -> None:
+                t0 = time.perf_counter()
+                plugin_instance = ns.feat.start_parsing(ns)
+                notion_processor = NotionProcessor(
+                    ns.notion_database_id, ns.notion_token
+                )
+                updates = await start_processing(
+                    plugin_instance, notion_processor=notion_processor
+                )
+                t1 = time.perf_counter()
+                print(f"[DONE] synchronized, {updates} changes in {round(t1 - t0)}s")
+
+            asyncio.run(run_all())
+    finally:
+        # Also display stats in case of failure
+        if ns.statistics == _STATS_IN_CONSOLE:
+            print(f"[STATS] Statistics\n{stats}")
+    return 0
 
 
 if __name__ == "__main__":
