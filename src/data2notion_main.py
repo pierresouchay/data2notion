@@ -78,12 +78,26 @@ class Statistics:
         self.records_updated = Statistic("records_updated")
         self.ignored_modifications = Statistic("ignored_modifications")
 
+    def iterate_on_stats(self) -> Iterable[Statistic]:
+        for attr in dir(self):
+            if not attr.startswith("__"):
+                stat = getattr(self, attr)
+                if isinstance(stat, Statistic):
+                    yield stat
+
+    def display_non_empty_stats(self, prefix: str = " - ") -> str:
+        return "\n".join(
+            [
+                f"{prefix}{stat}"
+                for stat in filter(lambda s: s.count > 0, self.iterate_on_stats())
+            ]
+        )
+
     def __repr__(self) -> str:
         return "\n".join(
             [
-                f" - {str(getattr(self, attr))}"
-                for attr in dir(self)
-                if not attr.startswith("__")
+                f" - {stat}"
+                for stat in self.iterate_on_stats()
             ]
         )
 
@@ -769,7 +783,6 @@ def main() -> int:
         help="Select import source from the list",
         required=True,
     )
-
     for plugin in available_plugins():
         if not plugin.is_disabled(__plugin_api_version__):
             p_plugin = subparsers.add_parser(
@@ -813,14 +826,14 @@ def main() -> int:
                     print("[ERROR] while running:", notion_processor.urgent_shutdown)
                 else:
                     print(
-                        f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s URL: "
+                        f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s"
                     )
 
             asyncio.run(run_all())
     finally:
         # Also display stats in case of failure
         if ns.statistics == _STATS_IN_CONSOLE:
-            print(f"[STATS] Statistics\n{stats}")
+            print(f"[STATS] Statistics\n{stats.display_non_empty_stats()}")
     return 0
 
 
