@@ -21,7 +21,7 @@ def extract_error_message_from_prometheus(query: str, response: httpx.Response) 
             prom_err_msg = json.loads(response.text)
 
             err_msg = prom_err_msg.get("error", "")
-            if err_msg.starts_with(_INVALID_QUERY_PFX):
+            if err_msg.startswith(_INVALID_QUERY_PFX):
                 return f"Error in query '{query}': {err_msg[len(_INVALID_QUERY_PFX):]}"
             if err_msg:
                 return err_msg

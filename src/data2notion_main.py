@@ -34,7 +34,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 __plugin_api_version__ = 1.0
 
@@ -663,6 +663,9 @@ def parse_change_behaviour(value: str) -> ApplyPolicy:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export some data into a notion database"
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     parser.add_argument(
         "--log-level",
