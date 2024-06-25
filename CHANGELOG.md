@@ -1,5 +1,12 @@
 # Changelog for data2notion
 
+## 1.0.2 - 2023-06-25
+
+FIX:
+
+ - Improve error messages in Prometheus when evaluating expression / be sure to have
+   all labels available in --row-id-expression
+
 ## 1.0.1 - 2024-06-25
 
 Minor version: doc and statistics

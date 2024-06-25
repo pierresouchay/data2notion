@@ -89,9 +89,23 @@ class PrometheusPluginInstance(PluginInstance):
 
             return f"{base_name}{labels_str}"
 
-        available_labels = dict(result)
+        available_labels = dict(result["metric"])
         available_labels["labels_str"] = labels_str
-        return str(eval(self.evaluation, None, available_labels))  # pylint: disable=eval-used
+        try:
+            return str(eval(self.evaluation, None, available_labels))  # pylint: disable=eval-used
+        except NameError as err:
+            msg = f"Error while evaluating --row-id-expression '{self.evaluation}' did fail: {err}."
+            available_variables = ", ".join(sorted(available_labels.keys()))
+            print("[ERROR][prometheus]: ", msg)
+            print(
+                "       [prometheus]: *** The following variables are available:",
+                available_variables,
+                "***",
+            )
+            print(
+                "       [prometheus]: Please fix you expression in --row-id-expression or use __default__"
+            )
+            raise err
 
     def values(self) -> Iterable[SourceRecord]:
         for idx, result in enumerate(self.results):
