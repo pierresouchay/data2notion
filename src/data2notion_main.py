@@ -7,7 +7,17 @@ import random
 import sys
 import time
 from abc import abstractmethod
-from typing import Any, AsyncGenerator, Awaitable, Callable, Coroutine, Iterable, Union
+from enum import Enum
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Sequence,
+    Union,
+)
 
 from notion_client import AsyncClient
 from notion_client.errors import APIErrorCode, APIResponseError
@@ -52,9 +62,9 @@ class Statistic:
         self.increment(time.perf_counter() - self._runnings.pop())
 
     def __repr__(self) -> str:
-        res = f"{self.name:<16}: {self.count:>4} in {round(self.seconds, 1)}s"
-        if self.count > 0:
-            res += f" ({round(self.count / self.seconds, 1):<4}/s)"
+        res = f"{self.name:<16}: {self.count:>4}"
+        if self.seconds > 0:
+            res += f" in {round(self.seconds, 1)}s ({round(self.count / self.seconds, 1):<4}/s)"
         return res
 
 
@@ -66,6 +76,7 @@ class Statistics:
         self.records_added = Statistic("record_added")
         self.records_removed = Statistic("records_removed")
         self.records_updated = Statistic("records_updated")
+        self.ignored_modifications = Statistic("ignored_modifications")
 
     def __repr__(self) -> str:
         return "\n".join(
@@ -187,11 +198,25 @@ class NotionDataBaseInfo:
                     self.title = k
 
 
+class ApplyPolicy(str, Enum):
+    APPLY = "APPLY"
+    CONFIRM = "CONFIRM"
+    IGNORE = "IGNORE"
+
+
+class ApplyPolicies:
+    def __init__(self) -> None:
+        self.update = ApplyPolicy.APPLY
+        self.add = ApplyPolicy.APPLY
+        self.remove = ApplyPolicy.APPLY
+
+
 class NotionProcessor:
     def __init__(self, database_id: str, notion_token: str):
         self.notion = AsyncClient(auth=notion_token)
         self.database_id = database_id
         self.db_info = NotionDataBaseInfo({})
+        self.apply_policies = ApplyPolicies()
 
     async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
@@ -294,6 +319,10 @@ def pop_best_candidate(
 class NotionPageModification:
     def __init__(self) -> None:
         pass
+
+    @property
+    def modification_type(self) -> str:
+        return self.__class__.__name__
 
     @retry_http()
     @abstractmethod
@@ -475,6 +504,109 @@ async def consume_updates(q: asyncio.Queue[Union[object, Awaitable[Any]]]) -> No
     q.task_done()
 
 
+async def process_modification(
+    notion_processor: NotionProcessor,
+    page_modification: NotionPageModification,
+    confirmations: list[NotionPageModification],
+    queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
+) -> None:
+    if isinstance(page_modification, PageToAdd):
+        my_policy = notion_processor.apply_policies.add
+    elif isinstance(page_modification, PageToUpdate):
+        my_policy = notion_processor.apply_policies.update
+    elif isinstance(page_modification, PageToRemove):
+        my_policy = notion_processor.apply_policies.remove
+    else:
+        raise ValueError(f"Unexpected type: {type(page_modification)}")
+    assert my_policy
+    if my_policy == ApplyPolicy.APPLY:
+        await queue.put(page_modification.apply_changes(notion_processor))
+    elif my_policy == ApplyPolicy.CONFIRM:
+        confirmations.append(page_modification)
+    elif my_policy == ApplyPolicy.IGNORE:
+        stats.ignored_modifications.increment(0)
+    else:
+        raise ValueError("Unexpected ApplyPolicy" + my_policy)
+
+
+def filter_by_type(
+    modification_type: str, confirmations: Iterable[NotionPageModification]
+) -> Sequence[NotionPageModification]:
+    return list(
+        filter(lambda v: v.modification_type == modification_type, confirmations)
+    )
+
+
+def confirm_change(
+    page_modification: NotionPageModification,
+    possible_choices: Iterable[str],
+    policy_by_modification_type: dict[str, str],
+    items_with_same_type: Iterable[NotionPageModification],
+) -> str:
+    response = ""
+    while response not in ["yes", "no"]:
+        response = input(f"[CONFIRM] Pick a choice {possible_choices}:").lower()
+        if response == "yes!":
+            response = "yes"
+            policy_by_modification_type[page_modification.modification_type] = "yes"
+        elif response == "no!":
+            response = "no"
+            policy_by_modification_type[page_modification.modification_type] = "no"
+        elif response == "see":
+            print("Similar changes are", page_modification.modification_type)
+            for modif in items_with_same_type:
+                print(" - ", modif)
+    return response
+
+
+async def process_confirmations(
+    notion_processor: NotionProcessor,
+    confirmations: list[NotionPageModification],
+    queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
+) -> None:
+    policy_by_modification_type: dict[str, str] = {}
+    while confirmations:
+        page_modification = confirmations.pop(0)
+        pre_set_policy = policy_by_modification_type.get(
+            page_modification.modification_type
+        )
+        response = "unknown"
+        if pre_set_policy:
+            response = pre_set_policy
+        else:
+            possible_choices = ["yes", "no"]
+            print(
+                "[CONFIRM] Please confirm the current modification",
+                page_modification,
+            )
+            items_with_same_type = filter_by_type(
+                modification_type=page_modification.modification_type,
+                confirmations=confirmations,
+            )
+            if len(items_with_same_type) > 0:
+                possible_choices += ["see", "yes!", "no!"]
+                print(
+                    "\tThere are",
+                    len(items_with_same_type),
+                    "similar modification(s)",
+                )
+                print("\t\tsee\tlist similar modifications")
+                print("\t\tyes!\tyes to all similar modifications")
+                print("\t\tno!\tNo to all similar modifications")
+            response = confirm_change(
+                page_modification=page_modification,
+                possible_choices=possible_choices,
+                policy_by_modification_type=policy_by_modification_type,
+                items_with_same_type=items_with_same_type,
+            )
+        assert response in ["yes", "no"]
+        if response == "yes":
+            print("  ✔", page_modification)
+            await queue.put(page_modification.apply_changes(notion_processor))
+        else:
+            print("  🚫", page_modification)
+
+
 async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
@@ -486,13 +618,22 @@ async def start_processing(
     consumers = [
         asyncio.create_task(consume_updates(queue)) for _ in range(num_concurrent)
     ]
+    confirmations: list[NotionPageModification] = []
     updates = 0
-    async for f in find_changes(plugin=plugin, notion_processor=notion_processor):
+    async for page_modification in find_changes(
+        plugin=plugin, notion_processor=notion_processor
+    ):
         updates += 1
-        if isinstance(f, NotionPageModification):
-            await queue.put(f.apply_changes(notion_processor))
-        else:
-            print("Don't know what to do with {f}")
+        await process_modification(
+            notion_processor=notion_processor,
+            page_modification=page_modification,
+            confirmations=confirmations,
+            queue=queue,
+        )
+
+    await process_confirmations(
+        notion_processor=notion_processor, confirmations=confirmations, queue=queue
+    )
     for _ in range(num_concurrent):
         await queue.put(STOP_FETCHING)
     await asyncio.gather(*consumers)
@@ -503,6 +644,20 @@ _LOGGER_LEVELS = ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 
 
 _STATS_IN_CONSOLE = "console"
+
+
+def change_behaviour_values() -> Iterable[str]:
+    for x in ApplyPolicy:
+        yield x.name
+
+
+def parse_change_behaviour(value: str) -> ApplyPolicy:
+    for x in ApplyPolicy:
+        if value.upper() == x.name.upper():
+            return x
+    raise KeyError(
+        f"{value} is not valid, must be any of {list(change_behaviour_values())}"
+    )
 
 
 def main() -> int:
@@ -545,6 +700,31 @@ def main() -> int:
         help="Notion Database ID to sync with",
     )
 
+    write_to_notion_parser.add_argument(
+        "--add-policy",
+        action="store",
+        default=ApplyPolicy.APPLY,
+        help="What do on new rows when writting to Notion (default: APPLY)",
+        type=parse_change_behaviour,
+        choices=list(change_behaviour_values()),
+    )
+    write_to_notion_parser.add_argument(
+        "--delete-policy",
+        action="store",
+        default=ApplyPolicy.APPLY,
+        help="What do on deleted rows when writting to Notion (default: APPLY)",
+        type=parse_change_behaviour,
+        choices=list(change_behaviour_values()),
+    )
+    write_to_notion_parser.add_argument(
+        "--update-policy",
+        action="store",
+        default=ApplyPolicy.APPLY,
+        help="What do on updated rows when writting to Notion (default: APPLY)",
+        type=parse_change_behaviour,
+        choices=list(change_behaviour_values()),
+    )
+
     subparsers = write_to_notion_parser.add_subparsers(
         title="Plugins to read data",
         description="Read data from source using one of source types",
@@ -583,6 +763,9 @@ def main() -> int:
                 notion_processor = NotionProcessor(
                     ns.notion_database_id, ns.notion_token
                 )
+                notion_processor.apply_policies.add = ns.add_policy
+                notion_processor.apply_policies.remove = ns.delete_policy
+                notion_processor.apply_policies.update = ns.update_policy
                 updates = await start_processing(
                     plugin_instance, notion_processor=notion_processor
                 )
