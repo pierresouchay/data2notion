@@ -1,6 +1,7 @@
 import argparse
 import datetime as dt
 import hashlib
+import json
 import os
 from typing import Any, Iterable
 
@@ -10,6 +11,24 @@ from data2notion.serialization import NotionType
 
 from . import __plugins__version__
 from .plugin import Plugin, PluginInfo, PluginInstance, SourceRecord
+
+_INVALID_QUERY_PFX = 'invalid parameter "query": '
+
+
+def extract_error_message_from_prometheus(query: str, response: httpx.Response) -> str:
+    if response.text:
+        try:
+            prom_err_msg = json.loads(response.text)
+
+            err_msg = prom_err_msg.get("error", "")
+            if err_msg.startswith(_INVALID_QUERY_PFX):
+                return f"Error in query '{query}': {err_msg[len(_INVALID_QUERY_PFX):]}"
+            if err_msg:
+                return err_msg
+        except json.decoder.JSONDecodeError:
+            pass
+        return f"Unknow Prometheus error HTTP[{response.status_code}]: {response.text}"
+    return f"Unknown Prometheus error HTTP[{response.status_code}]"
 
 
 class PrometheusPluginInstance(PluginInstance):
@@ -30,6 +49,11 @@ class PrometheusPluginInstance(PluginInstance):
         self.removed_columns = set(remove_column) if remove_column else set()
 
         response = httpx.get(f"{prometheus_url}/api/v1/query", params={"query": query})
+        if response.status_code != 200:
+            raise ValueError(
+                f"{prometheus_url} replied: {extract_error_message_from_prometheus(query=query, response=response)}"
+            )
+        assert response.status_code == 200
         results = response.json()["data"]["result"]
 
         # Build a list of all labelnames used.
@@ -89,9 +113,23 @@ class PrometheusPluginInstance(PluginInstance):
 
             return f"{base_name}{labels_str}"
 
-        available_labels = dict(result)
+        available_labels = dict(result["metric"])
         available_labels["labels_str"] = labels_str
-        return str(eval(self.evaluation, None, available_labels))  # pylint: disable=eval-used
+        try:
+            return str(eval(self.evaluation, None, available_labels))  # pylint: disable=eval-used
+        except NameError as err:
+            msg = f"Error while evaluating --row-id-expression '{self.evaluation}' did fail: {err}."
+            available_variables = ", ".join(sorted(available_labels.keys()))
+            print("[ERROR][prometheus]: ", msg)
+            print(
+                "       [prometheus]: *** The following variables are available:",
+                available_variables,
+                "***",
+            )
+            print(
+                "       [prometheus]: Please fix you expression in --row-id-expression or use __default__"
+            )
+            raise err
 
     def values(self) -> Iterable[SourceRecord]:
         for idx, result in enumerate(self.results):
@@ -109,7 +147,7 @@ class PrometheusPluginInstance(PluginInstance):
                 val_id = self.mappings.get(label)
                 if val_id:
                     row[val_id] = result["metric"].get(label, "")
-            yield SourceRecord(row, source_id=idx)
+            yield SourceRecord(row, source_id=f"[{idx}] {id_of_row}")
 
     def close(self) -> None:
         pass
