@@ -91,7 +91,7 @@ class PrometheusPluginInstance(PluginInstance):
 
         available_labels = dict(result)
         available_labels["labels_str"] = labels_str
-        return eval(self.evaluation, None, available_labels)  # pylint: disable=eval-used
+        return str(eval(self.evaluation, None, available_labels))  # pylint: disable=eval-used
 
     def values(self) -> Iterable[SourceRecord]:
         for idx, result in enumerate(self.results):

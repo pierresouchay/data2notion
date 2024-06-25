@@ -48,7 +48,7 @@ class Statistic:
     def __enter__(self) -> None:
         self._runnings.append(time.perf_counter())
 
-    def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
         self.increment(time.perf_counter() - self._runnings.pop())
 
     def __repr__(self) -> str:
@@ -193,7 +193,7 @@ class NotionProcessor:
         self.database_id = database_id
         self.db_info = NotionDataBaseInfo({})
 
-    async def read_db_props(self):
+    async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
         self.db_info = NotionDataBaseInfo(db_info)
 
