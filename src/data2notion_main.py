@@ -149,6 +149,16 @@ def retry_http() -> (
                 except APIResponseError as err:
                     if err.code in [
                         APIErrorCode.RateLimited,
+                    ]:
+                        for arg in args:
+                            if isinstance(arg, NotionProcessor):
+                                arg.urgent_shutdown = str(APIErrorCode.RateLimited)
+                            logger.error(
+                                "We have been rate limited, urgent shutdown: %s",
+                                str(err),
+                            )
+                        return str(APIErrorCode.RateLimited)
+                    if err.code in [
                         APIErrorCode.ConflictError,
                         APIErrorCode.ServiceUnavailable,
                     ]:
@@ -186,10 +196,16 @@ class NotionRecord:
         return get_canonical_value_from_notion(self._props.get(prop_name))
 
 
+def concat_plain_text(notion_structured_text: Iterable[dict[str, Any]]) -> str:
+    return "".join(map(lambda a: a.get("plain_text", ""), notion_structured_text))
+
+
 class NotionDataBaseInfo:
     def __init__(self, retrieve_db_info: dict[str, Any]):
         self.properties: dict[str, str] = {}
-        self.title = ""
+        self.title = concat_plain_text(retrieve_db_info.get("title", []))
+        self.description = concat_plain_text(retrieve_db_info.get("description", []))
+        self.url = retrieve_db_info.get("url", "")
         for k, v in retrieve_db_info.get("properties", {}).items():
             if k:
                 typ = v["type"]
@@ -211,16 +227,29 @@ class ApplyPolicies:
         self.remove = ApplyPolicy.APPLY
 
 
+def truncate_chars(val: str, max_len: int) -> str:
+    if len(val) > max_len:
+        return val[: max_len - 1] + "…"
+    return val
+
+
 class NotionProcessor:
     def __init__(self, database_id: str, notion_token: str):
         self.notion = AsyncClient(auth=notion_token)
         self.database_id = database_id
         self.db_info = NotionDataBaseInfo({})
         self.apply_policies = ApplyPolicies()
+        self.urgent_shutdown = ""
 
     async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
         self.db_info = NotionDataBaseInfo(db_info)
+        print(
+            "[START] Syncing",
+            self.db_info.url,
+            truncate_chars(self.db_info.title, 32),
+            f"[{truncate_chars(self.db_info.description, 32)}]…",
+        )
 
     async def iterate_over_pages(self) -> AsyncGenerator[NotionRecord, None]:
         num_notion_records = 0
@@ -602,6 +631,9 @@ async def process_confirmations(
         assert response in ["yes", "no"]
         if response == "yes":
             print("  ✔", page_modification)
+            if notion_processor.urgent_shutdown:
+                logger.error("Emergency shutdown: %s", notion_processor.urgent_shutdown)
+                break
             await queue.put(page_modification.apply_changes(notion_processor))
         else:
             print("  🚫", page_modification)
@@ -624,6 +656,9 @@ async def start_processing(
         plugin=plugin, notion_processor=notion_processor
     ):
         updates += 1
+        if notion_processor.urgent_shutdown:
+            logger.error("Emergency shutdown: %s", notion_processor.urgent_shutdown)
+            break
         await process_modification(
             notion_processor=notion_processor,
             page_modification=page_modification,
@@ -751,6 +786,7 @@ def main() -> int:
         format="%(asctime)s [%(levelname)5s][%(name)11s] %(message)s",
         force=True,
     )
+
     try:
         if not hasattr(ns, "feat"):
             parser.print_help()
@@ -773,7 +809,12 @@ def main() -> int:
                     plugin_instance, notion_processor=notion_processor
                 )
                 t1 = time.perf_counter()
-                print(f"[DONE] synchronized, {updates} changes in {round(t1 - t0)}s")
+                if notion_processor.urgent_shutdown:
+                    print("[ERROR] while running:", notion_processor.urgent_shutdown)
+                else:
+                    print(
+                        f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s URL: "
+                    )
 
             asyncio.run(run_all())
     finally:

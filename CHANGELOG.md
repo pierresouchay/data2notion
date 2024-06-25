@@ -1,5 +1,12 @@
 # Changelog for data2notion
 
+## Upcoming
+
+FEAT:
+
+ - Detect Too many requests and shutdown immediatly
+ - Display URL, title and information at startup when syncing
+
 ## 1.0.3 - 2023-06-25
 
 FEAT:
