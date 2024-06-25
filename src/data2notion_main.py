@@ -34,7 +34,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 __plugin_api_version__ = 1.0
 
@@ -94,12 +94,7 @@ class Statistics:
         )
 
     def __repr__(self) -> str:
-        return "\n".join(
-            [
-                f" - {stat}"
-                for stat in self.iterate_on_stats()
-            ]
-        )
+        return "\n".join([f" - {stat}" for stat in self.iterate_on_stats()])
 
 
 stats = Statistics()

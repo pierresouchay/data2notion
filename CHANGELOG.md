@@ -1,13 +1,14 @@
 # Changelog for data2notion
 
-## Upcoming
+## 1.0.4 - 2024-06-26
 
 FEAT:
 
  - Detect Too many requests and shutdown immediatly
  - Display URL, title and information at startup when syncing
+ - Improved display of statistics
 
-## 1.0.3 - 2023-06-25
+## 1.0.3 - 2024-06-25
 
 FEAT:
 
@@ -16,7 +17,7 @@ FEAT:
  - prometheus: better error handling and more precise error messages when queries are wrong
  - added --version to show current version information
 
-## 1.0.2 - 2023-06-25
+## 1.0.2 - 2024-06-25
 
 FIX:
 
