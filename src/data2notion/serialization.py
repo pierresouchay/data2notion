@@ -96,6 +96,9 @@ def read_names(prop: Any) -> Any:
         )
     return [read_by_name(p) for p in prop]
 
+def read_names_as_joined_str(prop: Any) -> str:
+    return "\n".join(read_names(prop))
+
 
 def read_date(prop: Any) -> Any:
     if prop is None:
@@ -228,7 +231,7 @@ serialization_readers: dict[NotionType, Callable[[Any], Any]] = {
     NotionType.formula: parse_formula,
     NotionType.last_edited_by: read_by_id,
     NotionType.last_edited_time: read_date,
-    NotionType.multi_select: read_names,
+    NotionType.multi_select: read_names_as_joined_str,
     NotionType.number: no_op,
     NotionType.people: read_people,
     NotionType.phone_number: no_op,
