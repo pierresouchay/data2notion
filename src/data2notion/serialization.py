@@ -96,6 +96,7 @@ def read_names(prop: Any) -> Any:
         )
     return [read_by_name(p) for p in prop]
 
+
 def read_names_as_joined_str(prop: Any) -> str:
     return "\n".join(read_names(prop))
 

@@ -32,7 +32,7 @@ def extract_error_message_from_prometheus(query: str, response: httpx.Response) 
 
 
 class PrometheusPluginInstance(PluginInstance):
-    def __init__(  # pylint: disable=R0913
+    def __init__(  # pylint: disable=R0913,R0917
         self,
         prometheus_url: str,
         query: str,

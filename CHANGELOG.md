@@ -1,5 +1,13 @@
 # Changelog for data2notion
 
+## Upcoming
+
+## 1.0.5 - 2024-10-16
+
+PERF:
+
+ - Properly diff multi-select to avoid always trying to update values
+
 ## 1.0.4 - 2024-06-26
 
 FEAT:
