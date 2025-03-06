@@ -55,14 +55,21 @@ The first level is teh following:
 
 ```bash
 data2notion --help
-usage: data2notion [-h] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--statistics {console,disabled}] [--notion-token NOTION_TOKEN] {plugins,write-to-notion} ...
+usage: data2notion [-h] [--version] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}]
+                   [--notion-rate-limit NOTION_RATE_LIMIT] [--statistics {console,disabled}] [--notion-token NOTION_TOKEN]
+                   {plugins,write-to-notion} ...
 
 Export some data into a notion database
 
 options:
   -h, --help            show this help message and exit
+  --version             show program's version number and exit
   --log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}
-                        Set the log level (default=WARNING)
+                        Set the default log level (default=WARNING)
+  --notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}
+                        Set the log level for data2notion (default=INFO)
+  --notion-rate-limit NOTION_RATE_LIMIT
+                        Set the notion rate-limiter, by default {default_rate_limit} (3 requests/sec, 100 initial bucket size)
   --statistics {console,disabled}
                         Display Statistics when program ends
   --notion-token NOTION_TOKEN

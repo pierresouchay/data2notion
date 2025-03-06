@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.0.6 - 2025-03-06
+
+PERF:
+
+ - added `--notion-rate-limiter` option to specify rate limit
+
 ## 1.0.5 - 2024-10-16
 
 PERF:
