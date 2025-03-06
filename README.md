@@ -149,30 +149,34 @@ Export metrics from prometheus (lastest values only) in Notion database.
 Inspired by [prom2csv](https://pypi.org/project/prom2csv/), this plugin let you export your last prometheus metrics in Notion!
 
 ```bash
-usage: data2notion write-to-notion <notion_database_id> prometheus [-h] [--prometheus-url PROMETHEUS_URL]
-                                                             [--column-name-mapping COLUMN_NAME_MAPPING COLUMN_NAME_MAPPING]
-                                                             [--row-id-expression ROW_ID_EXPRESSION] [--remove-column REMOVE_COLUMN]
-                                                             query
+data2notion --help
+usage: data2notion [-h] [--version] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--no-progress-bar] [--notion-rate-limit NOTION_RATE_LIMIT]
+                   [--statistics {console,disabled}] [--notion-token NOTION_TOKEN]
+                   {plugins,write-to-notion} ...
 
-Write Prometheus metrics to Notion
-
-positional arguments:
-  query                 PromQL Prometheus query to perfom, aggregation supported
+Export some data into a notion database
 
 options:
   -h, --help            show this help message and exit
-  --prometheus-url PROMETHEUS_URL
-                        The URL of Prometheus instance to query, default to $PROMETHEUS_URL or http://localhost:9090
-  --column-name-mapping COLUMN_NAME_MAPPING COLUMN_NAME_MAPPING
-                        map a column into a specific name (timestamp, value + labels) into another name: --column-name-mapping value MyValueColumnInNotion (can
-                        be repeated). Title column is mapped automatically
-  --row-id-expression ROW_ID_EXPRESSION
-                        First column value (default=__default__'): default will concatenate metric name and labels You can use python expression using labels,
-                        example: --row-id-expression 'f"my_metrics{labels_str}"'labels_str:= label concatened the prometheus way, but all label can be used for
-                        evalutation.By default, it will use `__name__{labels_str}` if __name__ exists, otherwise, __name__ will be replace by a hash of the
-                        query (if you perform aggregation).
-  --remove-column REMOVE_COLUMN
-                        Remove a column, can be specified multiple times
+  --version             show program's version number and exit
+  --log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}
+                        Set the default log level (default from $NOTION_LOG_LEVEL=WARNING)
+  --notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}
+                        Set the log level for data2notion (default=INFO)
+  --no-progress-bar     Disable the progress bar
+  --notion-rate-limit NOTION_RATE_LIMIT
+                        Set the notion rate-limiter, by default {default_rate_limit} (3 requests/sec, 100 initial bucket size)
+  --statistics {console,disabled}
+                        Display Statistics when program ends
+  --notion-token NOTION_TOKEN
+                        Notion Token to use $NOTION_TOKEN by default
+
+action to perform:
+  action to perform
+
+  {plugins,write-to-notion}
+                        sub-command help
+    write-to-notion     write to Notion Database
 ```
 
 
