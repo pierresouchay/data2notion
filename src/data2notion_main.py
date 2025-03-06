@@ -8,6 +8,7 @@ import sys
 import time
 from abc import abstractmethod
 from enum import Enum
+from types import TracebackType
 from typing import (
     Any,
     AsyncGenerator,
@@ -15,10 +16,14 @@ from typing import (
     Callable,
     Coroutine,
     Iterable,
+    Optional,
     Sequence,
+    Type,
     Union,
 )
 
+import asynciolimiter
+import click
 from notion_client import AsyncClient
 from notion_client.errors import APIErrorCode, APIResponseError
 from notion_client.helpers import async_iterate_paginated_api
@@ -34,7 +39,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 __plugin_api_version__ = 1.0
 
@@ -100,6 +105,31 @@ class Statistics:
 stats = Statistics()
 
 
+def create_rate_limiter(spec: str) -> asynciolimiter._CommonLimiterMixin:
+    split_vals = spec.split(":")
+    assert (
+        len(split_vals) == 2
+    ), f"rate limiter spec: <req_per_sec_float>:<capacity_int>, but was: {spec}"
+    rate = float(split_vals[0])
+    capacity = int(split_vals[1])
+    logger.debug(
+        "Using notion rate LeakyBucketLimiter %.2f req/s, capacity=%d", rate, capacity
+    )
+    _rate_limiter = asynciolimiter.LeakyBucketLimiter(rate=rate, capacity=capacity)
+    return _rate_limiter
+
+
+def default_rate_limit() -> str:
+    return os.getenv("NOTION_RATE_LIMIT", "3:100")
+
+
+_rate_limiter = create_rate_limiter(default_rate_limit())
+
+
+def rate_limiter() -> asynciolimiter._CommonLimiterMixin:
+    return _rate_limiter
+
+
 def available_plugins() -> Iterable[Plugin]:
     additional_plugins = os.getenv("DATA2NOTION_ADDITIONAL_PLUGINS", "").split(",")
     for plugin_spec in additional_plugins + [
@@ -145,34 +175,36 @@ def find_title(rec: SourceRecord, title_in_notion: str) -> str:
 T = str  # the callable/awaitable return type
 
 
+MAX_HTTP_TRIES = 5
+
+
 def retry_http() -> (
     Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]
 ):
     def wrapper(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         async def wrapped(*args: Any, **kwargs: Any) -> T:
-            for retry in range(1, 5):
+            last_error = ""
+            for retry in range(1, MAX_HTTP_TRIES):
                 sleep_for = retry**2 + random.random() * retry
                 try:
+                    await rate_limiter().wait()
                     response = await func(*args, **kwargs)
                     return response
                 except APIResponseError as err:
                     if err.code in [
-                        APIErrorCode.RateLimited,
-                    ]:
-                        for arg in args:
-                            if isinstance(arg, NotionProcessor):
-                                arg.urgent_shutdown = str(APIErrorCode.RateLimited)
-                            logger.error(
-                                "We have been rate limited, urgent shutdown: %s",
-                                str(err),
-                            )
-                        return str(APIErrorCode.RateLimited)
-                    if err.code in [
                         APIErrorCode.ConflictError,
                         APIErrorCode.ServiceUnavailable,
+                        APIErrorCode.RateLimited,
                     ]:
                         if err.code == APIErrorCode.RateLimited:
-                            sleep_for = min(60, sleep_for)
+                            # https://developers.notion.com/reference/request-limits
+                            # integer number of seconds
+                            sleep_for = int(err.headers["Retry-After"])
+                            assert sleep_for
+                        elif err.code == APIErrorCode.ConflictError:
+                            # This happens sometimes when doing too many requests at once
+                            sleep_for = 15
+
                         logger.warning(
                             "[RETRY %d] will retry in %ds due to %s: %s",
                             retry,
@@ -180,6 +212,7 @@ def retry_http() -> (
                             err.code,
                             str(err),
                         )
+                        last_error = str(err.code)
                         await asyncio.sleep(sleep_for)
                     else:
                         logger.error(
@@ -188,7 +221,9 @@ def retry_http() -> (
                             str(err),
                         )
                         raise err
-            return response
+            raise IOError(
+                f"Cannot fetch data after {MAX_HTTP_TRIES} tries, last_error={last_error}"
+            )
 
         return wrapped
 
@@ -248,7 +283,6 @@ class NotionProcessor:
         self.database_id = database_id
         self.db_info = NotionDataBaseInfo({})
         self.apply_policies = ApplyPolicies()
-        self.urgent_shutdown = ""
 
     async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
@@ -469,6 +503,7 @@ def generate_modifiable_fields_from_notion(
     return res
 
 
+# pylint: disable=too-many-locals
 async def find_changes(
     plugin: PluginInstance, notion_processor: NotionProcessor
 ) -> AsyncGenerator[Union[PageToRemove, PageToAdd, PageToUpdate], None]:
@@ -492,29 +527,35 @@ async def find_changes(
     )
     t0 = time.perf_counter()
     num_notion_records = 0
-    async for notion_rec in notion_processor.iterate_over_pages():
-        num_notion_records += 1
-        title = notion_rec.get_canonical(title_in_notion)
-        if title is None:
-            title = ""
-        assert notion_rec.id
-        title = title.strip()
-        candidates = indexed_source_records.get(title)
-        if candidates:
-            candidate = pop_best_candidate(notion_rec=notion_rec, candidates=candidates)
-            if len(candidates) == 0:
-                del indexed_source_records[title]
-            assert candidate
-            # Now, we compare
-            res = find_diffs(
-                notion_record=notion_rec,
-                source_record=candidate,
-                fields_to_compare=fields_intersection,
-            )
-            if res:
-                yield PageToUpdate(notion_rec.id, res)
-        else:
-            yield PageToRemove(notion_rec.id, title=title)
+    with MyProgressBar(
+        length=stats.source_records.count, label="Fetching Notion Records"
+    ) as progress:
+        async for notion_rec in notion_processor.iterate_over_pages():
+            num_notion_records += 1
+            progress.update(1)
+            title = notion_rec.get_canonical(title_in_notion)
+            if title is None:
+                title = ""
+            assert notion_rec.id
+            title = title.strip()
+            candidates = indexed_source_records.get(title)
+            if candidates:
+                candidate = pop_best_candidate(
+                    notion_rec=notion_rec, candidates=candidates
+                )
+                if len(candidates) == 0:
+                    del indexed_source_records[title]
+                assert candidate
+                # Now, we compare
+                res = find_diffs(
+                    notion_record=notion_rec,
+                    source_record=candidate,
+                    fields_to_compare=fields_intersection,
+                )
+                if res:
+                    yield PageToUpdate(notion_rec.id, res)
+            else:
+                yield PageToRemove(notion_rec.id, title=title)
     stats.notion_records.set(num_notion_records, time.perf_counter() - t0)
     logger.info(
         "Processed %d records from Notion in %.1fs",
@@ -597,62 +638,90 @@ def confirm_change(
     return response
 
 
+class MyProgressBar:
+    no_progress_bar = False
+
+    def __init__(self, length: int, label: str) -> None:
+        self.progress: Any = (
+            None
+            if MyProgressBar.no_progress_bar or length == 0
+            else click.progressbar(length=length, label=label, file=sys.stderr)
+        )
+
+    def __enter__(self) -> "MyProgressBar":
+        if self.progress:
+            self.progress.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        if self.progress:
+            self.progress.__exit__(exc_type, exc_value, tb)
+
+    def update(self, n_steps: int) -> None:
+        if self.progress:
+            self.progress.update(n_steps=n_steps)
+
+
 async def process_confirmations(
     notion_processor: NotionProcessor,
     confirmations: list[NotionPageModification],
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
 ) -> None:
     policy_by_modification_type: dict[str, str] = {}
-    while confirmations:
-        page_modification = confirmations.pop(0)
-        pre_set_policy = policy_by_modification_type.get(
-            page_modification.modification_type
-        )
-        response = "unknown"
-        if pre_set_policy:
-            response = pre_set_policy
-        else:
-            possible_choices = ["yes", "no"]
-            print(
-                "[CONFIRM] Please confirm the current modification",
-                page_modification,
+    with MyProgressBar(length=len(confirmations), label="Applying changes") as progress:
+        while confirmations:
+            page_modification = confirmations.pop(0)
+            pre_set_policy = policy_by_modification_type.get(
+                page_modification.modification_type
             )
-            items_with_same_type = filter_by_type(
-                modification_type=page_modification.modification_type,
-                confirmations=confirmations,
-            )
-            if len(items_with_same_type) > 0:
-                possible_choices += ["see", "yes!", "no!"]
+            response = "unknown"
+            if pre_set_policy:
+                response = pre_set_policy
+            else:
+                possible_choices = ["yes", "no"]
                 print(
-                    "\tThere are",
-                    len(items_with_same_type),
-                    "similar modification(s)",
+                    "[CONFIRM] Please confirm the current modification",
+                    page_modification,
                 )
-                print("\t\tsee\tlist similar modifications")
-                print("\t\tyes!\tyes to all similar modifications")
-                print("\t\tno!\tNo to all similar modifications")
-            response = confirm_change(
-                page_modification=page_modification,
-                possible_choices=possible_choices,
-                policy_by_modification_type=policy_by_modification_type,
-                items_with_same_type=items_with_same_type,
-            )
-        assert response in ["yes", "no"]
-        if response == "yes":
-            print("  ✔", page_modification)
-            if notion_processor.urgent_shutdown:
-                logger.error("Emergency shutdown: %s", notion_processor.urgent_shutdown)
-                break
-            await queue.put(page_modification.apply_changes(notion_processor))
-        else:
-            print("  🚫", page_modification)
+                items_with_same_type = filter_by_type(
+                    modification_type=page_modification.modification_type,
+                    confirmations=confirmations,
+                )
+                if len(items_with_same_type) > 0:
+                    possible_choices += ["see", "yes!", "no!"]
+                    print(
+                        "\tThere are",
+                        len(items_with_same_type),
+                        "similar modification(s)",
+                    )
+                    print("\t\tsee\tlist similar modifications")
+                    print("\t\tyes!\tyes to all similar modifications")
+                    print("\t\tno!\tNo to all similar modifications")
+                response = confirm_change(
+                    page_modification=page_modification,
+                    possible_choices=possible_choices,
+                    policy_by_modification_type=policy_by_modification_type,
+                    items_with_same_type=items_with_same_type,
+                )
+            assert response in ["yes", "no"]
+            if response == "yes":
+                print("  ✔", page_modification)
+                await queue.put(page_modification.apply_changes(notion_processor))
+            else:
+                print("  🚫", page_modification)
+            progress.update(1)
 
 
 async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
 ) -> int:
-    num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "10"))
+    num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "100"))
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]] = asyncio.Queue(
         maxsize=num_concurrent
     )
@@ -665,9 +734,6 @@ async def start_processing(
         plugin=plugin, notion_processor=notion_processor
     ):
         updates += 1
-        if notion_processor.urgent_shutdown:
-            logger.error("Emergency shutdown: %s", notion_processor.urgent_shutdown)
-            break
         await process_modification(
             notion_processor=notion_processor,
             page_modification=page_modification,
@@ -704,6 +770,10 @@ def parse_change_behaviour(value: str) -> ApplyPolicy:
     )
 
 
+def default_log_level() -> str:
+    return os.getenv("NOTION_LOG_LEVEL", "WARNING")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export some data into a notion database"
@@ -713,9 +783,25 @@ def main() -> int:
     )
     parser.add_argument(
         "--log-level",
-        help="Set the log level (default=WARNING)",
+        help=f"Set the default log level (default from $NOTION_LOG_LEVEL={default_log_level()})",
         choices=_LOGGER_LEVELS,
-        default="WARNING",
+        default=default_log_level(),
+    )
+    parser.add_argument(
+        "--notion-log-level",
+        help="Set the log level for data2notion (default=INFO)",
+        choices=_LOGGER_LEVELS,
+        default="INFO",
+    )
+    parser.add_argument(
+        "--no-progress-bar",
+        help="Disable the progress bar",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--notion-rate-limit",
+        help="Set the notion rate-limiter, by default {default_rate_limit} (3 requests/sec, 100 initial bucket size)",
+        default=default_rate_limit(),
     )
     parser.add_argument(
         "--statistics",
@@ -789,11 +875,18 @@ def main() -> int:
             plugin.register_in_parser(p_plugin)
 
     ns = parser.parse_args()
+    if ns.no_progress_bar:
+        MyProgressBar.no_progress_bar = True
+
     logging.basicConfig(
-        level=getattr(logging, ns.log_level),
+        level=ns.log_level,
         format="%(asctime)s [%(levelname)5s][%(name)11s] %(message)s",
         force=True,
     )
+    logger.setLevel(ns.notion_log_level)
+
+    global _rate_limiter  # pylint: disable=global-statement
+    _rate_limiter = create_rate_limiter(ns.notion_rate_limit)
 
     try:
         if not hasattr(ns, "feat"):
@@ -817,12 +910,9 @@ def main() -> int:
                     plugin_instance, notion_processor=notion_processor
                 )
                 t1 = time.perf_counter()
-                if notion_processor.urgent_shutdown:
-                    print("[ERROR] while running:", notion_processor.urgent_shutdown)
-                else:
-                    print(
-                        f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s"
-                    )
+                print(
+                    f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s"
+                )
 
             asyncio.run(run_all())
     finally:
