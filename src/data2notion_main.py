@@ -8,6 +8,7 @@ import sys
 import time
 from abc import abstractmethod
 from enum import Enum
+from types import TracebackType
 from typing import (
     Any,
     AsyncGenerator,
@@ -15,11 +16,14 @@ from typing import (
     Callable,
     Coroutine,
     Iterable,
+    Optional,
     Sequence,
+    Type,
     Union,
 )
 
 import asynciolimiter
+import click
 from notion_client import AsyncClient
 from notion_client.errors import APIErrorCode, APIResponseError
 from notion_client.helpers import async_iterate_paginated_api
@@ -499,6 +503,7 @@ def generate_modifiable_fields_from_notion(
     return res
 
 
+# pylint: disable=too-many-locals
 async def find_changes(
     plugin: PluginInstance, notion_processor: NotionProcessor
 ) -> AsyncGenerator[Union[PageToRemove, PageToAdd, PageToUpdate], None]:
@@ -522,29 +527,35 @@ async def find_changes(
     )
     t0 = time.perf_counter()
     num_notion_records = 0
-    async for notion_rec in notion_processor.iterate_over_pages():
-        num_notion_records += 1
-        title = notion_rec.get_canonical(title_in_notion)
-        if title is None:
-            title = ""
-        assert notion_rec.id
-        title = title.strip()
-        candidates = indexed_source_records.get(title)
-        if candidates:
-            candidate = pop_best_candidate(notion_rec=notion_rec, candidates=candidates)
-            if len(candidates) == 0:
-                del indexed_source_records[title]
-            assert candidate
-            # Now, we compare
-            res = find_diffs(
-                notion_record=notion_rec,
-                source_record=candidate,
-                fields_to_compare=fields_intersection,
-            )
-            if res:
-                yield PageToUpdate(notion_rec.id, res)
-        else:
-            yield PageToRemove(notion_rec.id, title=title)
+    with MyProgressBar(
+        length=stats.source_records.count, label="Fetching Notion Records"
+    ) as progress:
+        async for notion_rec in notion_processor.iterate_over_pages():
+            num_notion_records += 1
+            progress.update(1)
+            title = notion_rec.get_canonical(title_in_notion)
+            if title is None:
+                title = ""
+            assert notion_rec.id
+            title = title.strip()
+            candidates = indexed_source_records.get(title)
+            if candidates:
+                candidate = pop_best_candidate(
+                    notion_rec=notion_rec, candidates=candidates
+                )
+                if len(candidates) == 0:
+                    del indexed_source_records[title]
+                assert candidate
+                # Now, we compare
+                res = find_diffs(
+                    notion_record=notion_rec,
+                    source_record=candidate,
+                    fields_to_compare=fields_intersection,
+                )
+                if res:
+                    yield PageToUpdate(notion_rec.id, res)
+            else:
+                yield PageToRemove(notion_rec.id, title=title)
     stats.notion_records.set(num_notion_records, time.perf_counter() - t0)
     logger.info(
         "Processed %d records from Notion in %.1fs",
@@ -627,52 +638,83 @@ def confirm_change(
     return response
 
 
+class MyProgressBar:
+    no_progress_bar = False
+
+    def __init__(self, length: int, label: str) -> None:
+        self.progress: Any = (
+            None
+            if MyProgressBar.no_progress_bar or length == 0
+            else click.progressbar(length=length, label=label, file=sys.stderr)
+        )
+
+    def __enter__(self) -> "MyProgressBar":
+        if self.progress:
+            self.progress.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        if self.progress:
+            self.progress.__exit__(exc_type, exc_value, tb)
+
+    def update(self, n_steps: int) -> None:
+        if self.progress:
+            self.progress.update(n_steps=n_steps)
+
+
 async def process_confirmations(
     notion_processor: NotionProcessor,
     confirmations: list[NotionPageModification],
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
 ) -> None:
     policy_by_modification_type: dict[str, str] = {}
-    while confirmations:
-        page_modification = confirmations.pop(0)
-        pre_set_policy = policy_by_modification_type.get(
-            page_modification.modification_type
-        )
-        response = "unknown"
-        if pre_set_policy:
-            response = pre_set_policy
-        else:
-            possible_choices = ["yes", "no"]
-            print(
-                "[CONFIRM] Please confirm the current modification",
-                page_modification,
+    with MyProgressBar(length=len(confirmations), label="Applying changes") as progress:
+        while confirmations:
+            page_modification = confirmations.pop(0)
+            pre_set_policy = policy_by_modification_type.get(
+                page_modification.modification_type
             )
-            items_with_same_type = filter_by_type(
-                modification_type=page_modification.modification_type,
-                confirmations=confirmations,
-            )
-            if len(items_with_same_type) > 0:
-                possible_choices += ["see", "yes!", "no!"]
+            response = "unknown"
+            if pre_set_policy:
+                response = pre_set_policy
+            else:
+                possible_choices = ["yes", "no"]
                 print(
-                    "\tThere are",
-                    len(items_with_same_type),
-                    "similar modification(s)",
+                    "[CONFIRM] Please confirm the current modification",
+                    page_modification,
                 )
-                print("\t\tsee\tlist similar modifications")
-                print("\t\tyes!\tyes to all similar modifications")
-                print("\t\tno!\tNo to all similar modifications")
-            response = confirm_change(
-                page_modification=page_modification,
-                possible_choices=possible_choices,
-                policy_by_modification_type=policy_by_modification_type,
-                items_with_same_type=items_with_same_type,
-            )
-        assert response in ["yes", "no"]
-        if response == "yes":
-            print("  ✔", page_modification)
-            await queue.put(page_modification.apply_changes(notion_processor))
-        else:
-            print("  🚫", page_modification)
+                items_with_same_type = filter_by_type(
+                    modification_type=page_modification.modification_type,
+                    confirmations=confirmations,
+                )
+                if len(items_with_same_type) > 0:
+                    possible_choices += ["see", "yes!", "no!"]
+                    print(
+                        "\tThere are",
+                        len(items_with_same_type),
+                        "similar modification(s)",
+                    )
+                    print("\t\tsee\tlist similar modifications")
+                    print("\t\tyes!\tyes to all similar modifications")
+                    print("\t\tno!\tNo to all similar modifications")
+                response = confirm_change(
+                    page_modification=page_modification,
+                    possible_choices=possible_choices,
+                    policy_by_modification_type=policy_by_modification_type,
+                    items_with_same_type=items_with_same_type,
+                )
+            assert response in ["yes", "no"]
+            if response == "yes":
+                print("  ✔", page_modification)
+                await queue.put(page_modification.apply_changes(notion_processor))
+            else:
+                print("  🚫", page_modification)
+            progress.update(1)
 
 
 async def start_processing(
@@ -752,6 +794,11 @@ def main() -> int:
         default="INFO",
     )
     parser.add_argument(
+        "--no-progress-bar",
+        help="Disable the progress bar",
+        action="store_true",
+    )
+    parser.add_argument(
         "--notion-rate-limit",
         help="Set the notion rate-limiter, by default {default_rate_limit} (3 requests/sec, 100 initial bucket size)",
         default=default_rate_limit(),
@@ -828,6 +875,8 @@ def main() -> int:
             plugin.register_in_parser(p_plugin)
 
     ns = parser.parse_args()
+    if ns.no_progress_bar:
+        MyProgressBar.no_progress_bar = True
 
     logging.basicConfig(
         level=ns.log_level,
