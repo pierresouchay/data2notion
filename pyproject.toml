@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
     "asynciolimiter",
     "click",
-    "notion-client",
+    "notion-client~=2.2",
 ]
 
 [project.scripts]

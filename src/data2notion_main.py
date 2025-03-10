@@ -39,7 +39,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.6"
+__version__ = "1.0.7"
 
 __plugin_api_version__ = 1.0
 
@@ -292,6 +292,8 @@ class NotionProcessor:
             self.db_info.url,
             truncate_chars(self.db_info.title, 32),
             f"[{truncate_chars(self.db_info.description, 32)}]…",
+            "ver",
+            __version__,
         )
 
     async def iterate_over_pages(self) -> AsyncGenerator[NotionRecord, None]:
@@ -573,12 +575,44 @@ async def find_changes(
 STOP_FETCHING = object()
 
 
-async def consume_updates(q: asyncio.Queue[Union[object, Awaitable[Any]]]) -> None:
+class MyProgressBar:
+    no_progress_bar = False
+
+    def __init__(self, length: int, label: str) -> None:
+        self.progress: Any = (
+            None
+            if MyProgressBar.no_progress_bar or length == 0
+            else click.progressbar(length=length, label=label, file=sys.stderr)
+        )
+
+    def __enter__(self) -> "MyProgressBar":
+        if self.progress:
+            self.progress.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        if self.progress:
+            self.progress.__exit__(exc_type, exc_value, tb)
+
+    def update(self, n_steps: int) -> None:
+        if self.progress:
+            self.progress.update(n_steps=n_steps)
+
+
+async def consume_updates(
+    progress: MyProgressBar, q: asyncio.Queue[Union[object, Awaitable[Any]]]
+) -> None:
     to_await = await q.get()
     while to_await is not STOP_FETCHING:
         assert isinstance(to_await, Awaitable)
         await to_await
         q.task_done()
+        progress.update(1)
         to_await = await q.get()
     q.task_done()
 
@@ -638,96 +672,62 @@ def confirm_change(
     return response
 
 
-class MyProgressBar:
-    no_progress_bar = False
-
-    def __init__(self, length: int, label: str) -> None:
-        self.progress: Any = (
-            None
-            if MyProgressBar.no_progress_bar or length == 0
-            else click.progressbar(length=length, label=label, file=sys.stderr)
-        )
-
-    def __enter__(self) -> "MyProgressBar":
-        if self.progress:
-            self.progress.__enter__()
-        return self
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        tb: Optional[TracebackType],
-    ) -> None:
-        if self.progress:
-            self.progress.__exit__(exc_type, exc_value, tb)
-
-    def update(self, n_steps: int) -> None:
-        if self.progress:
-            self.progress.update(n_steps=n_steps)
-
-
 async def process_confirmations(
     notion_processor: NotionProcessor,
     confirmations: list[NotionPageModification],
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
 ) -> None:
     policy_by_modification_type: dict[str, str] = {}
-    with MyProgressBar(length=len(confirmations), label="Applying changes") as progress:
-        while confirmations:
-            page_modification = confirmations.pop(0)
-            pre_set_policy = policy_by_modification_type.get(
-                page_modification.modification_type
+
+    while confirmations:
+        page_modification = confirmations.pop(0)
+        pre_set_policy = policy_by_modification_type.get(
+            page_modification.modification_type
+        )
+        response = "unknown"
+        if pre_set_policy:
+            response = pre_set_policy
+        else:
+            possible_choices = ["yes", "no"]
+            print(
+                "[CONFIRM] Please confirm the current modification",
+                page_modification,
             )
-            response = "unknown"
-            if pre_set_policy:
-                response = pre_set_policy
-            else:
-                possible_choices = ["yes", "no"]
+            items_with_same_type = filter_by_type(
+                modification_type=page_modification.modification_type,
+                confirmations=confirmations,
+            )
+            if len(items_with_same_type) > 0:
+                possible_choices += ["see", "yes!", "no!"]
                 print(
-                    "[CONFIRM] Please confirm the current modification",
-                    page_modification,
+                    "\tThere are",
+                    len(items_with_same_type),
+                    "similar modification(s)",
                 )
-                items_with_same_type = filter_by_type(
-                    modification_type=page_modification.modification_type,
-                    confirmations=confirmations,
-                )
-                if len(items_with_same_type) > 0:
-                    possible_choices += ["see", "yes!", "no!"]
-                    print(
-                        "\tThere are",
-                        len(items_with_same_type),
-                        "similar modification(s)",
-                    )
-                    print("\t\tsee\tlist similar modifications")
-                    print("\t\tyes!\tyes to all similar modifications")
-                    print("\t\tno!\tNo to all similar modifications")
-                response = confirm_change(
-                    page_modification=page_modification,
-                    possible_choices=possible_choices,
-                    policy_by_modification_type=policy_by_modification_type,
-                    items_with_same_type=items_with_same_type,
-                )
-            assert response in ["yes", "no"]
-            if response == "yes":
-                print("  ✔", page_modification)
-                await queue.put(page_modification.apply_changes(notion_processor))
-            else:
-                print("  🚫", page_modification)
-            progress.update(1)
+                print("\t\tsee\tlist similar modifications")
+                print("\t\tyes!\tyes to all similar modifications")
+                print("\t\tno!\tNo to all similar modifications")
+            response = confirm_change(
+                page_modification=page_modification,
+                possible_choices=possible_choices,
+                policy_by_modification_type=policy_by_modification_type,
+                items_with_same_type=items_with_same_type,
+            )
+        assert response in ["yes", "no"]
+        if response == "yes":
+            print("  ✔", page_modification)
+            await queue.put(page_modification.apply_changes(notion_processor))
+        else:
+            print("  🚫", page_modification)
 
 
 async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
 ) -> int:
-    num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "100"))
-    queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]] = asyncio.Queue(
-        maxsize=num_concurrent
-    )
-    consumers = [
-        asyncio.create_task(consume_updates(queue)) for _ in range(num_concurrent)
-    ]
+    num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "10"))
+    queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]] = asyncio.Queue()
+
     confirmations: list[NotionPageModification] = []
     updates = 0
     async for page_modification in find_changes(
@@ -741,12 +741,24 @@ async def start_processing(
             queue=queue,
         )
 
-    await process_confirmations(
-        notion_processor=notion_processor, confirmations=confirmations, queue=queue
-    )
-    for _ in range(num_concurrent):
-        await queue.put(STOP_FETCHING)
-    await asyncio.gather(*consumers)
+    with MyProgressBar(length=updates, label=f"Applying {updates} changes") as progress:
+        consumers = [
+            asyncio.create_task(consume_updates(progress=progress, q=queue))
+            for _ in range(num_concurrent)
+        ]
+        await process_confirmations(
+            notion_processor=notion_processor, confirmations=confirmations, queue=queue
+        )
+        for _ in range(num_concurrent):
+            await queue.put(STOP_FETCHING)
+        results = await asyncio.gather(*consumers, return_exceptions=True)
+        exceptions = []
+        for res in results:
+            if isinstance(res, BaseException):
+                exceptions.append(res)
+        if exceptions:
+            print("[ERR] Had Exceptions", exceptions)
+
     return updates
 
 
