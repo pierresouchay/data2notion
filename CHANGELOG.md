@@ -2,6 +2,17 @@
 
 ## Upcoming
 
+## 1.0.7 - 2025-03-10
+
+FEAT:
+
+ - improve progressbar during updates
+
+FIX:
+
+ - improve possible deadlocks for databases with huge number of entries to update
+ - dependency for notion_client to 2.x version
+
 ## 1.0.6 - 2025-03-06
 
 PERF:
