@@ -39,7 +39,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 
 __plugin_api_version__ = 1.0
 
@@ -725,7 +725,6 @@ async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
 ) -> int:
-    num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "10"))
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]] = asyncio.Queue()
 
     confirmations: list[NotionPageModification] = []
@@ -742,16 +741,14 @@ async def start_processing(
         )
 
     with MyProgressBar(length=updates, label=f"Applying {updates} changes") as progress:
-        consumers = [
-            asyncio.create_task(consume_updates(progress=progress, q=queue))
-            for _ in range(num_concurrent)
-        ]
         await process_confirmations(
             notion_processor=notion_processor, confirmations=confirmations, queue=queue
         )
-        for _ in range(num_concurrent):
-            await queue.put(STOP_FETCHING)
-        results = await asyncio.gather(*consumers, return_exceptions=True)
+        await queue.put(STOP_FETCHING)
+        results = await asyncio.gather(
+            asyncio.create_task(consume_updates(progress=progress, q=queue)),
+            return_exceptions=True,
+        )
         exceptions = []
         for res in results:
             if isinstance(res, BaseException):
