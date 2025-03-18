@@ -39,7 +39,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 
 __plugin_api_version__ = 1.0
 
@@ -185,7 +185,6 @@ def retry_http() -> (
         async def wrapped(*args: Any, **kwargs: Any) -> T:
             last_error = ""
             for retry in range(1, MAX_HTTP_TRIES):
-                sleep_for = retry**2 + random.random() * retry
                 try:
                     await rate_limiter().wait()
                     response = await func(*args, **kwargs)
@@ -199,11 +198,13 @@ def retry_http() -> (
                         if err.code == APIErrorCode.RateLimited:
                             # https://developers.notion.com/reference/request-limits
                             # integer number of seconds
-                            sleep_for = int(err.headers["Retry-After"])
+                            sleep_for = float(err.headers["Retry-After"])
                             assert sleep_for
                         elif err.code == APIErrorCode.ConflictError:
                             # This happens sometimes when doing too many requests at once
-                            sleep_for = 15
+                            sleep_for = 1 + retry**2 + random.random() * retry
+                        else:
+                            sleep_for = retry**2 + random.random() * retry
 
                         logger.warning(
                             "[RETRY %d] will retry in %ds due to %s: %s",
@@ -675,6 +676,7 @@ def confirm_change(
 async def process_confirmations(
     notion_processor: NotionProcessor,
     confirmations: list[NotionPageModification],
+    progress: MyProgressBar,
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
 ) -> None:
     policy_by_modification_type: dict[str, str] = {}
@@ -719,13 +721,13 @@ async def process_confirmations(
             await queue.put(page_modification.apply_changes(notion_processor))
         else:
             print("  🚫", page_modification)
+            progress.update(1)
 
 
 async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
 ) -> int:
-    num_concurrent = int(os.getenv("NOTION_MAX_CONCURRENT_CHANGES", "10"))
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]] = asyncio.Queue()
 
     confirmations: list[NotionPageModification] = []
@@ -742,16 +744,17 @@ async def start_processing(
         )
 
     with MyProgressBar(length=updates, label=f"Applying {updates} changes") as progress:
-        consumers = [
-            asyncio.create_task(consume_updates(progress=progress, q=queue))
-            for _ in range(num_concurrent)
-        ]
         await process_confirmations(
-            notion_processor=notion_processor, confirmations=confirmations, queue=queue
+            notion_processor=notion_processor,
+            confirmations=confirmations,
+            progress=progress,
+            queue=queue,
         )
-        for _ in range(num_concurrent):
-            await queue.put(STOP_FETCHING)
-        results = await asyncio.gather(*consumers, return_exceptions=True)
+        await queue.put(STOP_FETCHING)
+        results = await asyncio.gather(
+            asyncio.create_task(consume_updates(progress=progress, q=queue)),
+            return_exceptions=True,
+        )
         exceptions = []
         for res in results:
             if isinstance(res, BaseException):

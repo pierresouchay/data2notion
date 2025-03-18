@@ -164,9 +164,9 @@ serialization_writers = {
     NotionType.checkbox: str_to_bool,
     NotionType.date: lambda a: {"start": a} if a else None,
     NotionType.email: no_op,
-    NotionType.multi_select: lambda a: [{"name": x} for x in a.split("\n") if x]
-    if a
-    else [],
+    NotionType.multi_select: lambda a: (
+        [{"name": x} for x in a.split("\n") if x] if a else []
+    ),
     NotionType.number: write_number_canonic,
     NotionType.phone_number: no_op,
     NotionType.rich_text: write_to_notion_rich_text,
