@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.0.8 - 2025-03-18
+
+FIX:
+
+ - bump asynciolimiter ≥ 1.1.2 to fix possible deadlock when performing many updates
+
 ## 1.0.7 - 2025-03-10
 
 FEAT:
