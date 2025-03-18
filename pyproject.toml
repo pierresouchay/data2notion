@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "asynciolimiter>=1.1.2",
+    "asynciolimiter>=1.2.0",
     "click",
     "notion-client~=2.2",
 ]
