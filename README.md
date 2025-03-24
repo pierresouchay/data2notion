@@ -150,8 +150,9 @@ Inspired by [prom2csv](https://pypi.org/project/prom2csv/), this plugin let you 
 
 ```bash
 data2notion --help
-usage: data2notion [-h] [--version] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--no-progress-bar] [--notion-rate-limit NOTION_RATE_LIMIT]
-                   [--statistics {console,disabled}] [--notion-token NOTION_TOKEN]
+usage: data2notion [-h] [--version] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}]
+                   [--notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--no-progress-bar] [--notion-rate-limit NOTION_RATE_LIMIT]
+                   [--statistics {console,disabled}] [--notion-token NOTION_TOKEN] [--partition column_name=<regexp>]
                    {plugins,write-to-notion} ...
 
 Export some data into a notion database
@@ -170,6 +171,8 @@ options:
                         Display Statistics when program ends
   --notion-token NOTION_TOKEN
                         Notion Token to use $NOTION_TOKEN by default
+  --partition column_name=<regexp>
+                        Only synchronize records having a column matching given regexp
 
 action to perform:
   action to perform
@@ -201,4 +204,3 @@ and you might use it as any other plugin.
 ## Writing new plugins
 
 See [DESIGN.md](https://github.com/pierresouchay/data2notion/blob/main/DESIGN.md).
-

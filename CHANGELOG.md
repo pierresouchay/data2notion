@@ -2,6 +2,16 @@
 
 ## Upcoming
 
+## 1.0.9 - 2025-03-24
+
+FEAT:
+
+ - Support for partitioning synchronization
+   using `--partition tags=(tag1|tag2)` will now only sync elements from
+   source and destination when their property named 'tags' contains either tag1 or tag2.
+   This is helpful to partially synchronize several CSV files into the same database for instance.
+   This supports regexp, so possible to use `--partition 'tags=prefix1.*'` for instance
+
 ## 1.0.8 - 2025-03-18
 
 FIX:
