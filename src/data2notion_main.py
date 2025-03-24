@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import sys
 import time
 from abc import abstractmethod
@@ -39,7 +40,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.8"
+__version__ = "1.0.9"
 
 __plugin_api_version__ = 1.0
 
@@ -237,8 +238,21 @@ class NotionRecord:
         assert props["archived"] is False
         self._props = props["properties"]
 
-    def get_canonical(self, prop_name: str) -> Any:
-        return get_canonical_value_from_notion(self._props.get(prop_name))
+    def get_canonical(self, prop_name: str, default_value: Optional[Any] = None) -> Any:
+        return get_canonical_value_from_notion(
+            self._props.get(prop_name, default_value)
+        )
+
+    def is_part_of_partitions(self, partitions: dict[str, re.Pattern]) -> bool:
+        for partition, regex in partitions.items():
+            if partition not in self._props:
+                raise ValueError(
+                    f"Partition {partition} not in the NotionDB, possible fields: {list(sorted(self._props.keys()))}"
+                )
+            val = str(self.get_canonical(partition, ""))
+            if not regex.match(val):
+                return False
+        return True
 
 
 def concat_plain_text(notion_structured_text: Iterable[dict[str, Any]]) -> str:
@@ -284,6 +298,7 @@ class NotionProcessor:
         self.database_id = database_id
         self.db_info = NotionDataBaseInfo({})
         self.apply_policies = ApplyPolicies()
+        self.partitions: dict[str, re.Pattern] = {}
 
     async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
@@ -326,11 +341,23 @@ class SourceRecordCanonical:
             if val:
                 self.props[prop_name] = val
 
+    def is_part_of_partitions(self, partitions: dict[str, re.Pattern]) -> bool:
+        for partition, regexp in partitions.items():
+            if partition not in self.props:
+                raise ValueError(
+                    f"Partition {partition} not in source records, possible ones: {list(sorted(self.props.keys()))}"
+                )
+            res = self.props.get(partition, "")
+            if not regexp.match(res):
+                return False
+        return True
+
 
 def parse_source(
     plugin: PluginInstance,
     title_in_notion: str,
     fields_intersection: dict[str, NotionType],
+    notion_processor: NotionProcessor,
 ) -> tuple[dict[str, list[SourceRecordCanonical]], int]:
     indexed_source_records: dict[str, list[SourceRecordCanonical]] = {}
     title_in_source = ""
@@ -364,6 +391,8 @@ def parse_source(
             rec = SourceRecordCanonical(
                 rec_raw, plugin=plugin, fields_to_dump=fields_intersection
             )
+            if not rec.is_part_of_partitions(partitions=notion_processor.partitions):
+                continue
             idx = rec.props.get(title_in_source)
             if idx is None:
                 print(
@@ -521,6 +550,7 @@ async def find_changes(
         plugin=plugin,
         title_in_notion=title_in_notion,
         fields_intersection=fields_intersection,
+        notion_processor=notion_processor,
     )
     stats.source_records.set(rows_count_in_source, time.perf_counter() - t0)
     logger.info(
@@ -536,6 +566,8 @@ async def find_changes(
         async for notion_rec in notion_processor.iterate_over_pages():
             num_notion_records += 1
             progress.update(1)
+            if not notion_rec.is_part_of_partitions(notion_processor.partitions):
+                continue
             title = notion_rec.get_canonical(title_in_notion)
             if title is None:
                 title = ""
@@ -789,6 +821,19 @@ def default_log_level() -> str:
     return os.getenv("NOTION_LOG_LEVEL", "WARNING")
 
 
+def set_partitions_from_cmdline_flags(partitions: list[str]) -> dict[str, re.Pattern]:
+    returned: dict[str, re.Pattern] = {}
+    partition_pattern = re.compile(r"([^=]+)\=(.+)")
+    for partition in partitions:
+        res = partition_pattern.match(partition)
+        if res is None:
+            raise ValueError(
+                f"Cannot parse partition {partition}, must be partition_name=<regexp>"
+            )
+        returned[res.group(1)] = re.compile(res.group(2))
+    return returned
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export some data into a notion database"
@@ -828,6 +873,13 @@ def main() -> int:
         "--notion-token",
         help="Notion Token to use $NOTION_TOKEN by default",
         default=os.getenv("NOTION_TOKEN"),
+    )
+    parser.add_argument(
+        "--partition",
+        help="Only synchronize records having a column matching given regexp",
+        action="append",
+        metavar="column_name=<regexp>",
+        default=[],
     )
 
     subparsers_root = parser.add_subparsers(
@@ -921,6 +973,9 @@ def main() -> int:
                 notion_processor.apply_policies.add = ns.add_policy
                 notion_processor.apply_policies.remove = ns.delete_policy
                 notion_processor.apply_policies.update = ns.update_policy
+                notion_processor.partitions = set_partitions_from_cmdline_flags(
+                    ns.partition
+                )
                 updates = await start_processing(
                     plugin_instance, notion_processor=notion_processor
                 )
