@@ -63,6 +63,18 @@ def no_op(val: Any) -> Any:
 T = TypeVar("T")
 
 
+def are_different(notion_val: Any, source_val: Any) -> bool:
+    if isinstance(notion_val, dt.datetime):
+        if source_val:
+            # Notion does not store sec/ms level, so, ignore it in comparisons
+            source_dt = dt.datetime.fromisoformat(source_val)
+            source_dt = source_dt.replace(second=0, microsecond=0)
+            if source_dt == notion_val.replace(second=0, microsecond=0):
+                return False
+            return True
+    return str(notion_val) != str(source_val)
+
+
 def truncate_large_value(val: T) -> Union[T, str]:
     """
     Notion has a limit of 2000 chars in the API, so, we cannot send more than 2k chars
@@ -111,6 +123,8 @@ def read_date(prop: Any) -> Any:
             f"prop is supposed to be a dict, but was {type(prop)}: {prop}"
         )
     assert prop["time_zone"] is None
+    if prop["start"]:
+        return dt.datetime.fromisoformat(prop["start"])
     return prop["start"]
 
 
