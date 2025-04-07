@@ -2,6 +2,13 @@
 
 ## Upcoming
 
+## 1.0.10 - 2025-04-07
+
+PERF:
+
+- Propery compare timestamps of source/notion when source is more precise
+  than notion (which has minute-level granularity) -> fewer diffs -> more performance  
+
 ## 1.0.9 - 2025-03-24
 
 FEAT:

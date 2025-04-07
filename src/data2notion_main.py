@@ -32,6 +32,7 @@ from notion_client.helpers import async_iterate_paginated_api
 from data2notion.plugins.plugin import Plugin, PluginInstance, SourceRecord
 from data2notion.serialization import (
     NotionType,
+    are_different,
     convert_value_to_notion,
     get_canonical_value_from_notion,
     notion_type_from_str,
@@ -40,7 +41,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.9"
+__version__ = "1.0.10"
 
 __plugin_api_version__ = 1.0
 
@@ -513,7 +514,7 @@ def find_diffs(
         assert v
         notion_val = notion_record.get_canonical(k)
         source_val = source_record.props.get(k)
-        if str(notion_val) != str(source_val):
+        if are_different(notion_val=notion_val, source_val=source_val):
             res[k] = (notion_val, source_val)
     return res
 
@@ -948,7 +949,6 @@ def main() -> int:
     logging.basicConfig(
         level=ns.log_level,
         format="%(asctime)s [%(levelname)5s][%(name)11s] %(message)s",
-        force=True,
     )
     logger.setLevel(ns.notion_log_level)
 
