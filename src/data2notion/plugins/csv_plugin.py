@@ -1,12 +1,12 @@
 import argparse
 import csv
 import sys
-from typing import Iterable, TextIO
+from typing import Any, Iterable, TextIO
 
 from data2notion.serialization import NotionType
 
 from . import __plugins__version__
-from .plugin import Plugin, PluginInfo, PluginInstance, SourceRecord
+from .plugin import Plugin, PluginInfo, PluginInstance, PluginMode, SourceRecord
 
 
 class CSVPluginInstance(PluginInstance):
@@ -67,14 +67,18 @@ class CSVPlugin(Plugin):
         return PluginInfo(
             name="csv",
             author="Pierre Souchay",
-            description="Write to Notion DB from a CSV file",
+            description="Export/import CSV files from/to Notion DB",
             version=__plugins__version__,
         )
+
+    @property
+    def supported_modes(self) -> Iterable[PluginMode]:
+        return [PluginMode.DATA_TO_NOTION, PluginMode.NOTION_TO_DATA]
 
     def register_in_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "csv_file",
-            help="CSV file to inject in Notion, if '-' is set, read from stdin",
+            help="CSV file to use: for input mode, inject in Notion (or stdin with '-') ; for output mode, write to this file",
         )
         parser.add_argument(
             "--csv-dialect",
@@ -87,3 +91,18 @@ class CSVPlugin(Plugin):
 
     def start_parsing(self, ns: argparse.Namespace) -> PluginInstance:
         return CSVPluginInstance(ns.csv_file, dialect=ns.csv_dialect)
+
+    def start_output(
+        self, ns: argparse.Namespace, notion_properties: list[str], notion_records: Iterable[dict[str, Any]]
+    ) -> None:
+        file = open(ns.csv_file, "w", newline="", encoding="utf-8")
+        try:
+            records = list(notion_records)
+            if records:
+                writer = csv.DictWriter(
+                    file, fieldnames=notion_properties, dialect=ns.csv_dialect
+                )
+                writer.writeheader()
+                writer.writerows(records)
+        finally:
+            file.close()
