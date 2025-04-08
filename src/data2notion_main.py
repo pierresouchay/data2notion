@@ -109,9 +109,9 @@ stats = Statistics()
 
 def create_rate_limiter(spec: str) -> asynciolimiter._CommonLimiterMixin:
     split_vals = spec.split(":")
-    assert (
-        len(split_vals) == 2
-    ), f"rate limiter spec: <req_per_sec_float>:<capacity_int>, but was: {spec}"
+    assert len(split_vals) == 2, (
+        f"rate limiter spec: <req_per_sec_float>:<capacity_int>, but was: {spec}"
+    )
     rate = float(split_vals[0])
     capacity = int(split_vals[1])
     logger.debug(
@@ -180,9 +180,9 @@ T = str  # the callable/awaitable return type
 MAX_HTTP_TRIES = 5
 
 
-def retry_http() -> (
-    Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]
-):
+def retry_http() -> Callable[
+    [Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]
+]:
     def wrapper(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         async def wrapped(*args: Any, **kwargs: Any) -> T:
             last_error = ""

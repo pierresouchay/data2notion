@@ -22,7 +22,7 @@ def extract_error_message_from_prometheus(query: str, response: httpx.Response) 
 
             err_msg = prom_err_msg.get("error", "")
             if err_msg.startswith(_INVALID_QUERY_PFX):
-                return f"Error in query '{query}': {err_msg[len(_INVALID_QUERY_PFX):]}"  # noqa: E203
+                return f"Error in query '{query}': {err_msg[len(_INVALID_QUERY_PFX) :]}"  # noqa: E203
             if err_msg:
                 return err_msg
         except json.decoder.JSONDecodeError:
@@ -96,7 +96,7 @@ class PrometheusPluginInstance(PluginInstance):
             "{"
             + ",".join(
                 [
-                    f'{label}={result["metric"].get(label, "")}'
+                    f"{label}={result['metric'].get(label, '')}"
                     for label in self.labelnames
                     if label not in self.removed_columns
                 ]
