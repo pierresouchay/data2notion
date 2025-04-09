@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=C0302
 import argparse
 import asyncio
 import logging
@@ -757,7 +758,9 @@ async def process_confirmations(
             progress.update(1)
 
 
-async def fetch_from_notion(notion_processor: NotionProcessor) -> tuple[list[str], list[dict[str, Any]]]:
+async def fetch_from_notion(
+    notion_processor: NotionProcessor,
+) -> tuple[list[str], list[dict[str, Any]]]:
     """Fetch data from Notion database and convert to a tuple of (ordered_properties, records)."""
     await notion_processor.read_db_props()
     properties = list(notion_processor.db_info.properties.keys())
@@ -850,6 +853,7 @@ def set_partitions_from_cmdline_flags(partitions: list[str]) -> dict[str, re.Pat
     return returned
 
 
+# pylint: disable=R0915
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export some data into a notion database"
@@ -1013,12 +1017,16 @@ def main() -> int:
                 )
 
                 if ns.mode == PluginMode.NOTION_TO_DATA:
-                    notion_properties, notion_records = await fetch_from_notion(notion_processor)
-                    stats.notion_records.set(len(notion_records), time.perf_counter() - t0)
+                    notion_properties, notion_records = await fetch_from_notion(
+                        notion_processor
+                    )
+                    stats.notion_records.set(
+                        len(notion_records), time.perf_counter() - t0
+                    )
                     ns.feat.start_output(ns, notion_properties, notion_records)
                     t1 = time.perf_counter()
                     print(
-                        f"[DONE ] exported {len(notion_records)} records from {ns.notion_database_id} in {round(t1 - t0)}s"
+                        f"[DONE ] exported {len(notion_records)} rows from {ns.notion_database_id} in {round(t1 - t0)}s"
                     )
                 else:
                     plugin_instance = ns.feat.start_parsing(ns)

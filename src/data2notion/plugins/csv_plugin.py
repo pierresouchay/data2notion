@@ -78,7 +78,7 @@ class CSVPlugin(Plugin):
     def register_in_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "csv_file",
-            help="CSV file to use: for input mode, inject in Notion (or stdin with '-') ; for output mode, write to this file",
+            help="CSV file to use",
         )
         parser.add_argument(
             "--csv-dialect",
@@ -93,10 +93,12 @@ class CSVPlugin(Plugin):
         return CSVPluginInstance(ns.csv_file, dialect=ns.csv_dialect)
 
     def start_output(
-        self, ns: argparse.Namespace, notion_properties: list[str], notion_records: Iterable[dict[str, Any]]
+        self,
+        ns: argparse.Namespace,
+        notion_properties: list[str],
+        notion_records: Iterable[dict[str, Any]],
     ) -> None:
-        file = open(ns.csv_file, "w", newline="", encoding="utf-8")
-        try:
+        with open(ns.csv_file, "w", newline="", encoding="utf-8") as file:
             records = list(notion_records)
             if records:
                 writer = csv.DictWriter(
@@ -104,5 +106,3 @@ class CSVPlugin(Plugin):
                 )
                 writer.writeheader()
                 writer.writerows(records)
-        finally:
-            file.close()

@@ -204,17 +204,17 @@ class Plugin:
         Used for INPUT mode.
         """
         assert ns
-        if (
-            self.supported_modes != PluginMode.DATA_TO_NOTION
-        ):
+        if self.supported_modes != PluginMode.DATA_TO_NOTION:
             raise NotImplementedError(
                 f"Plugin {self.info.name} does not support input mode"
             )
         raise NotImplementedError()
 
-    @abstractmethod
     def start_output(
-        self, ns: argparse.Namespace, notion_properties: list[str], notion_records: Iterable[dict[str, Any]]
+        self,
+        ns: argparse.Namespace,
+        notion_properties: list[str],
+        notion_records: Iterable[dict[str, Any]],
     ) -> None:
         """
         Output data received from Notion.
@@ -223,8 +223,9 @@ class Plugin:
         Used for OUTPUT mode.
         """
         assert ns
-        if (self.supported_modes != PluginMode.NOTION_TO_DATA
-        ):
+        assert notion_properties
+        assert notion_records
+        if self.supported_modes != PluginMode.NOTION_TO_DATA:
             raise NotImplementedError(
                 f"Plugin {self.info.name} does not support output mode"
             )
