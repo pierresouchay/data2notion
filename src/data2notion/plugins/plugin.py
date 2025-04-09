@@ -1,6 +1,7 @@
 import argparse
 from abc import abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Iterable, Optional
 
 from data2notion.serialization import NotionType, serialize_canonical_from_source
@@ -137,6 +138,13 @@ class PluginInfo:
     version: str
 
 
+class PluginMode(str, Enum):
+    """Defines the supported modes for plugins"""
+
+    DATA_TO_NOTION = "import"
+    NOTION_TO_DATA = "export"
+
+
 class Plugin:
     def __init__(self) -> None:
         pass
@@ -148,6 +156,14 @@ class Plugin:
         Get the version of plugin and its version
         """
         raise NotImplementedError()
+
+    @property
+    def supported_modes(self) -> Iterable[PluginMode]:
+        """
+        Get the supported modes for this plugin.
+        Default implementation returns [DATA_TO_NOTION] for backward compatibility.
+        """
+        return [PluginMode.DATA_TO_NOTION]
 
     def is_disabled(self, plugin_api_version: float) -> Optional[str]:
         """
@@ -185,6 +201,31 @@ class Plugin:
         Start parsing the source and instantiate the PluginInstance.
 
         This is where you might open connections to an API, read a file...
+        Used for INPUT mode.
         """
         assert ns
+        if (
+            self.supported_modes != PluginMode.DATA_TO_NOTION
+        ):
+            raise NotImplementedError(
+                f"Plugin {self.info.name} does not support input mode"
+            )
+        raise NotImplementedError()
+
+    @abstractmethod
+    def start_output(
+        self, ns: argparse.Namespace, notion_properties: list[str], notion_records: Iterable[dict[str, Any]]
+    ) -> None:
+        """
+        Output data received from Notion.
+
+        This is where you can process and export the Notion data to their target format.
+        Used for OUTPUT mode.
+        """
+        assert ns
+        if (self.supported_modes != PluginMode.NOTION_TO_DATA
+        ):
+            raise NotImplementedError(
+                f"Plugin {self.info.name} does not support output mode"
+            )
         raise NotImplementedError()

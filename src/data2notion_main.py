@@ -29,7 +29,7 @@ from notion_client import AsyncClient
 from notion_client.errors import APIErrorCode, APIResponseError
 from notion_client.helpers import async_iterate_paginated_api
 
-from data2notion.plugins.plugin import Plugin, PluginInstance, SourceRecord
+from data2notion.plugins.plugin import Plugin, PluginInstance, PluginMode, SourceRecord
 from data2notion.serialization import (
     NotionType,
     are_different,
@@ -109,9 +109,9 @@ stats = Statistics()
 
 def create_rate_limiter(spec: str) -> asynciolimiter._CommonLimiterMixin:
     split_vals = spec.split(":")
-    assert (
-        len(split_vals) == 2
-    ), f"rate limiter spec: <req_per_sec_float>:<capacity_int>, but was: {spec}"
+    assert len(split_vals) == 2, (
+        f"rate limiter spec: <req_per_sec_float>:<capacity_int>, but was: {spec}"
+    )
     rate = float(split_vals[0])
     capacity = int(split_vals[1])
     logger.debug(
@@ -180,9 +180,9 @@ T = str  # the callable/awaitable return type
 MAX_HTTP_TRIES = 5
 
 
-def retry_http() -> (
-    Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]
-):
+def retry_http() -> Callable[
+    [Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]
+]:
     def wrapper(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         async def wrapped(*args: Any, **kwargs: Any) -> T:
             last_error = ""
@@ -757,6 +757,21 @@ async def process_confirmations(
             progress.update(1)
 
 
+async def fetch_from_notion(notion_processor: NotionProcessor) -> tuple[list[str], list[dict[str, Any]]]:
+    """Fetch data from Notion database and convert to a tuple of (ordered_properties, records)."""
+    await notion_processor.read_db_props()
+    properties = list(notion_processor.db_info.properties.keys())
+    result = []
+    async for notion_rec in notion_processor.iterate_over_pages():
+        record_data = {}
+        for prop_name in properties:
+            canonical_value = notion_rec.get_canonical(prop_name)
+            if canonical_value is not None:
+                record_data[prop_name] = canonical_value
+        result.append(record_data)
+    return (properties, result)
+
+
 async def start_processing(
     plugin: PluginInstance,
     notion_processor: NotionProcessor,
@@ -892,9 +907,20 @@ def main() -> int:
     list_plugins_parser = subparsers_root.add_parser("plugins")
     list_plugins_parser.set_defaults(feat=display_plugins)
 
+    export_from_notion_parser = subparsers_root.add_parser(
+        "export-from-notion", help="export from Notion Database"
+    )
+    export_from_notion_parser.set_defaults(mode=PluginMode.NOTION_TO_DATA)
+
+    export_from_notion_parser.add_argument(
+        "notion_database_id",
+        help="Notion Database ID to export",
+    )
+
     write_to_notion_parser = subparsers_root.add_parser(
         "write-to-notion", help="write to Notion Database"
     )
+    write_to_notion_parser.set_defaults(mode=PluginMode.DATA_TO_NOTION)
 
     write_to_notion_parser.add_argument(
         "notion_database_id",
@@ -926,21 +952,37 @@ def main() -> int:
         choices=list(change_behaviour_values()),
     )
 
-    subparsers = write_to_notion_parser.add_subparsers(
+    input_subparsers = write_to_notion_parser.add_subparsers(
         title="Plugins to read data",
         description="Read data from source using one of source types",
         help="Select import source from the list",
         required=True,
     )
+
+    output_subparsers = export_from_notion_parser.add_subparsers(
+        title="Plugins to output data",
+        description="Write data to destination using one of output types",
+        help="Select export destination from the list",
+        required=True,
+    )
+
+    def register_plugin(subparser):
+        parser = subparser.add_parser(
+            plugin.info.name,
+            description=plugin.info.description,
+            help=plugin.info.description,
+        )
+        parser.set_defaults(feat=plugin)
+        plugin.register_in_parser(parser)
+        return parser
+
     for plugin in available_plugins():
-        if not plugin.is_disabled(__plugin_api_version__):
-            p_plugin = subparsers.add_parser(
-                plugin.info.name,
-                description=plugin.info.description,
-                help=plugin.info.description,
-            )
-            p_plugin.set_defaults(feat=plugin)
-            plugin.register_in_parser(p_plugin)
+        if plugin.is_disabled(__plugin_api_version__):
+            continue
+        if PluginMode.NOTION_TO_DATA in plugin.supported_modes:
+            register_plugin(input_subparsers)
+        if PluginMode.DATA_TO_NOTION in plugin.supported_modes:
+            register_plugin(output_subparsers)
 
     ns = parser.parse_args()
     if ns.no_progress_bar:
@@ -966,23 +1008,30 @@ def main() -> int:
 
             async def run_all() -> None:
                 t0 = time.perf_counter()
-                plugin_instance = ns.feat.start_parsing(ns)
                 notion_processor = NotionProcessor(
                     ns.notion_database_id, ns.notion_token
                 )
-                notion_processor.apply_policies.add = ns.add_policy
-                notion_processor.apply_policies.remove = ns.delete_policy
-                notion_processor.apply_policies.update = ns.update_policy
-                notion_processor.partitions = set_partitions_from_cmdline_flags(
-                    ns.partition
-                )
-                updates = await start_processing(
-                    plugin_instance, notion_processor=notion_processor
-                )
-                t1 = time.perf_counter()
-                print(
-                    f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s"
-                )
+
+                if ns.mode == PluginMode.NOTION_TO_DATA:
+                    notion_properties, notion_records = await fetch_from_notion(notion_processor)
+                    stats.notion_records.set(len(notion_records), time.perf_counter() - t0)
+                    ns.feat.start_output(ns, notion_properties, notion_records)
+                    t1 = time.perf_counter()
+                    print(
+                        f"[DONE ] exported {len(notion_records)} records from {ns.notion_database_id} in {round(t1 - t0)}s"
+                    )
+                else:
+                    plugin_instance = ns.feat.start_parsing(ns)
+                    notion_processor.apply_policies.add = ns.add_policy
+                    notion_processor.apply_policies.remove = ns.delete_policy
+                    notion_processor.apply_policies.update = ns.update_policy
+                    updates = await start_processing(
+                        plugin_instance, notion_processor=notion_processor
+                    )
+                    t1 = time.perf_counter()
+                    print(
+                        f"[DONE ] synchronized {ns.notion_database_id}, {updates} changes in {round(t1 - t0)}s"
+                    )
 
             asyncio.run(run_all())
     finally:
