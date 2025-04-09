@@ -20,6 +20,17 @@ dependencies = [
     "notion-client~=2.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "build",
+    "flake8~=7.2",
+    "isort~=6.0",
+    "mypy~=1.15.0",
+    "pylint~=3.3.6",
+    "ruff~=0.11.4",
+    "twine",
+]
+
 [project.scripts]
 data2notion = "data2notion_main:main"
 
