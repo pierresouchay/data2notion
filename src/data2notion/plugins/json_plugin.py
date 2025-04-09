@@ -6,7 +6,7 @@ from typing import Iterable
 from data2notion.serialization import NotionType
 
 from . import __plugins__version__
-from .plugin import Plugin, PluginInfo, PluginInstance, SourceRecord
+from .plugin import Plugin, PluginInfo, PluginInstance, PluginMode, SourceRecord
 
 
 class JSONPluginInstance(PluginInstance):
@@ -63,6 +63,7 @@ class JSONPlugin(Plugin):
             author="Pierre Souchay",
             description="Write to Notion DB from a JSON file containing an array",
             version=__plugins__version__,
+            modes=[PluginMode.DATA_TO_NOTION],
         )
 
     def register_in_parser(self, parser: argparse.ArgumentParser) -> None:

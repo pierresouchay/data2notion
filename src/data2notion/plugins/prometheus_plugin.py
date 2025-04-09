@@ -10,7 +10,7 @@ import httpx
 from data2notion.serialization import NotionType
 
 from . import __plugins__version__
-from .plugin import Plugin, PluginInfo, PluginInstance, SourceRecord
+from .plugin import Plugin, PluginInfo, PluginInstance, PluginMode, SourceRecord
 
 _INVALID_QUERY_PFX = 'invalid parameter "query": '
 
@@ -166,6 +166,7 @@ class PrometheusPlugin(Plugin):
             author="Pierre Souchay",
             description="Write Prometheus metrics to Notion",
             version=__plugins__version__,
+            modes=[PluginMode.DATA_TO_NOTION],
         )
 
     def register_in_parser(self, parser: argparse.ArgumentParser) -> None:

@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.0.12 - 2025-04-09
+
+FIX:
+
+- fix buggy plugin filtering that cause import/export plugins to fail
+
 ## 1.0.11 - 2025-04-09
 
 FEAT:

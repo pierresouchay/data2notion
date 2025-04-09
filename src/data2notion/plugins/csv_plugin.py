@@ -69,6 +69,7 @@ class CSVPlugin(Plugin):
             author="Pierre Souchay",
             description="Export/import CSV files from/to Notion DB",
             version=__plugins__version__,
+            modes=[PluginMode.DATA_TO_NOTION, PluginMode.NOTION_TO_DATA],
         )
 
     @property

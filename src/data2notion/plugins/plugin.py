@@ -121,6 +121,13 @@ class PluginInstance:
         pass
 
 
+class PluginMode(str, Enum):
+    """Defines the supported modes for plugins"""
+
+    DATA_TO_NOTION = "import"
+    NOTION_TO_DATA = "export"
+
+
 @dataclass
 class PluginInfo:
     """
@@ -136,13 +143,7 @@ class PluginInfo:
     author: str
     description: str
     version: str
-
-
-class PluginMode(str, Enum):
-    """Defines the supported modes for plugins"""
-
-    DATA_TO_NOTION = "import"
-    NOTION_TO_DATA = "export"
+    modes: list[PluginMode]
 
 
 class Plugin:
@@ -156,14 +157,6 @@ class Plugin:
         Get the version of plugin and its version
         """
         raise NotImplementedError()
-
-    @property
-    def supported_modes(self) -> Iterable[PluginMode]:
-        """
-        Get the supported modes for this plugin.
-        Default implementation returns [DATA_TO_NOTION] for backward compatibility.
-        """
-        return [PluginMode.DATA_TO_NOTION]
 
     def is_disabled(self, plugin_api_version: float) -> Optional[str]:
         """
@@ -204,7 +197,7 @@ class Plugin:
         Used for INPUT mode.
         """
         assert ns
-        if self.supported_modes != PluginMode.DATA_TO_NOTION:
+        if PluginMode.DATA_TO_NOTION not in (self.info.modes):
             raise NotImplementedError(
                 f"Plugin {self.info.name} does not support input mode"
             )
@@ -225,7 +218,7 @@ class Plugin:
         assert ns
         assert notion_properties
         assert notion_records
-        if self.supported_modes != PluginMode.NOTION_TO_DATA:
+        if PluginMode.NOTION_TO_DATA not in (self.info.modes):
             raise NotImplementedError(
                 f"Plugin {self.info.name} does not support output mode"
             )

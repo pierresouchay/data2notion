@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.11"
+__version__ = "1.0.12"
 
 __plugin_api_version__ = 1.0
 
@@ -162,9 +162,9 @@ def display_plugins() -> None:
             msg = f"[ERR]: {disabled_reason}"
         else:
             msg = "[OK]\t"
-        print(
-            f" {msg} {p.info.name:<12}\t{p.info.version:<8} feat: {p.info.description:<64} by {p.info.author}"
-        )
+        modes = ",".join(map(lambda m: m.value, p.info.modes))
+        nfo = f"{p.info.name:<12}\t{p.info.version:<8} {modes:<13} feat: {p.info.description:<64} by {p.info.author}"
+        print(f" {msg} {nfo}")
 
 
 def find_title(rec: SourceRecord, title_in_notion: str) -> str:
@@ -983,9 +983,9 @@ def main() -> int:
     for plugin in available_plugins():
         if plugin.is_disabled(__plugin_api_version__):
             continue
-        if PluginMode.NOTION_TO_DATA in plugin.supported_modes:
+        if PluginMode.DATA_TO_NOTION in plugin.info.modes:
             register_plugin(input_subparsers)
-        if PluginMode.DATA_TO_NOTION in plugin.supported_modes:
+        if PluginMode.NOTION_TO_DATA in plugin.info.modes:
             register_plugin(output_subparsers)
 
     ns = parser.parse_args()
