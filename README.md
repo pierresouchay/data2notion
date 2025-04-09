@@ -149,11 +149,9 @@ Export metrics from prometheus (lastest values only) in Notion database.
 Inspired by [prom2csv](https://pypi.org/project/prom2csv/), this plugin let you export your last prometheus metrics in Notion!
 
 ```bash
-data2notion --help
-usage: data2notion [-h] [--version] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}]
-                   [--notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--no-progress-bar] [--notion-rate-limit NOTION_RATE_LIMIT]
-                   [--statistics {console,disabled}] [--notion-token NOTION_TOKEN] [--partition column_name=<regexp>]
-                   {plugins,write-to-notion} ...
+usage: data2notion [-h] [--version] [--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--notion-log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}] [--no-progress-bar] [--notion-rate-limit NOTION_RATE_LIMIT] [--statistics {console,disabled}]
+                   [--notion-token NOTION_TOKEN] [--partition column_name=<regexp>]
+                   {plugins,export-from-notion,write-to-notion} ...
 
 Export some data into a notion database
 
@@ -177,8 +175,9 @@ options:
 action to perform:
   action to perform
 
-  {plugins,write-to-notion}
+  {plugins,export-from-notion,write-to-notion}
                         sub-command help
+    export-from-notion  export from Notion Database
     write-to-notion     write to Notion Database
 ```
 

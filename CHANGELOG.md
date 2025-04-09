@@ -2,6 +2,13 @@
 
 ## Upcoming
 
+## 1.0.11 - 2025-04-09
+
+FEAT:
+
+- [jagu-sayan](https://github.com/jagu-sayan) added feature to export Notion into CSV
+  This feature supports CSV plugin only for now and can be used with `export-from-notion` command.
+
 ## 1.0.10 - 2025-04-07
 
 PERF:
