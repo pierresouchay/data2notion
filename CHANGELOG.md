@@ -2,6 +2,14 @@
 
 ## Upcoming
 
+## 1.0.13 - 2025-04-09
+
+PERF:
+
+- fix bug in diff that caused too many records to be updated
+  when source had no value (None): huge improvements on large CSV
+  files imports
+
 ## 1.0.12 - 2025-04-09
 
 FIX:

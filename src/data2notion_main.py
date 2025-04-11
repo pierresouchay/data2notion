@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.12"
+__version__ = "1.0.13"
 
 __plugin_api_version__ = 1.0
 
@@ -514,7 +514,7 @@ def find_diffs(
     for k, v in fields_to_compare.items():
         assert v
         notion_val = notion_record.get_canonical(k)
-        source_val = source_record.props.get(k)
+        source_val = source_record.props.get(k, "")
         if are_different(notion_val=notion_val, source_val=source_val):
             res[k] = (notion_val, source_val)
     return res
