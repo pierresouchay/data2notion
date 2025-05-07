@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.0.14 - 2025-05-07
+
+FEAT:
+
+- Improve prometheus error messages for connection issues / NameErrors
+
 ## 1.0.13 - 2025-04-09
 
 PERF:
