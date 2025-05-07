@@ -48,7 +48,14 @@ class PrometheusPluginInstance(PluginInstance):
         )
         self.removed_columns = set(remove_column) if remove_column else set()
 
-        response = httpx.get(f"{prometheus_url}/api/v1/query", params={"query": query})
+        try:
+            response = httpx.get(
+                f"{prometheus_url}/api/v1/query", params={"query": query}
+            )
+        except httpx.ConnectError as err:
+            msg = f'failed connecting to PROMETHEUS_URL="{prometheus_url}": err: {err}'
+            print("[ERROR][prometheus]:", msg)
+            raise httpx.ConnectError(msg) from None
         if response.status_code != 200:
             raise ValueError(
                 f"{prometheus_url} replied: {extract_error_message_from_prometheus(query=query, response=response)}"
@@ -120,7 +127,7 @@ class PrometheusPluginInstance(PluginInstance):
                 eval(self.evaluation, None, available_labels)  # pylint: disable=eval-used
             )
         except NameError as err:
-            msg = f"Error while evaluating --row-id-expression '{self.evaluation}' did fail: {err}."
+            msg = f"Error evaluating --row-id-expression '{self.evaluation}': {err}"
             available_variables = ", ".join(sorted(available_labels.keys()))
             print("[ERROR][prometheus]: ", msg)
             print(
@@ -131,7 +138,9 @@ class PrometheusPluginInstance(PluginInstance):
             print(
                 "       [prometheus]: Please fix you expression in --row-id-expression or use __default__"
             )
-            raise err
+            raise NameError(
+                f"{msg}. Available variables={available_variables}"
+            ) from None
 
     def values(self) -> Iterable[SourceRecord]:
         for idx, result in enumerate(self.results):
