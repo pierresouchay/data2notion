@@ -2,6 +2,14 @@
 
 ## Upcoming
 
+## 1.0.15 - 2025-05-21
+
+PERF:
+
+- Improve performance for diffs when None or [] was compared to empty data (eg: '')
+  will sync fewer data
+  
+
 ## 1.0.14 - 2025-05-07
 
 FEAT:
