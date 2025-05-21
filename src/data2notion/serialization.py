@@ -72,6 +72,10 @@ def are_different(notion_val: Any, source_val: Any) -> bool:
             if source_dt == notion_val.replace(second=0, microsecond=0):
                 return False
             return True
+    if not notion_val:
+        notion_val = ""
+    if not source_val:
+        source_val = ""
     return str(notion_val) != str(source_val)
 
 
