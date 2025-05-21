@@ -63,6 +63,16 @@ def no_op(val: Any) -> Any:
 T = TypeVar("T")
 
 
+def fix_empty_vals(val: Any) -> Any:
+    """
+    Some empty values have representations as str()
+    Avoid None, [] and False to be compared with '' and return proper values
+    """
+    if val is None or val is False or val == []:
+        return ""
+    return val
+
+
 def are_different(notion_val: Any, source_val: Any) -> bool:
     if isinstance(notion_val, dt.datetime):
         if source_val:
@@ -72,11 +82,7 @@ def are_different(notion_val: Any, source_val: Any) -> bool:
             if source_dt == notion_val.replace(second=0, microsecond=0):
                 return False
             return True
-    if not notion_val:
-        notion_val = ""
-    if not source_val:
-        source_val = ""
-    return str(notion_val) != str(source_val)
+    return str(fix_empty_vals(notion_val)) != str(fix_empty_vals(source_val))
 
 
 def truncate_large_value(val: T) -> Union[T, str]:

@@ -4,6 +4,12 @@
 
 ## 1.0.15 - 2025-05-21
 
+FIX:
+
+- avoid isses when comparing 0 and empty value when comparing on diffs
+
+## 1.0.15 - 2025-05-21
+
 PERF:
 
 - Improve performance for diffs when None or [] was compared to empty data (eg: '')
