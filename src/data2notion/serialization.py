@@ -8,13 +8,15 @@ from typing import Any, Callable, Optional, TypeVar, Union
 
 # pylint: disable=invalid-name
 class NotionCanonicalRepr(str, Enum):
-    array = list
-    boolean = bool
-    datetime = dt.datetime
-    number_r = float
+    array = "array"
+    boolean = "boolean"
+    datetime = "datetime"
+    multitags = "multitags"
+    number_r = "number_r"
     person = "person"
     relation_r = "relation"
-    string = str
+    string = "string"
+    tag = "tag"
 
 
 class NotionType(Enum):
@@ -27,14 +29,14 @@ class NotionType(Enum):
     formula = ("formula", NotionCanonicalRepr.string)
     last_edited_by = ("last_edited_by", NotionCanonicalRepr.person)
     last_edited_time = ("last_edited_time", NotionCanonicalRepr.datetime)
-    multi_select = ("multi_select", NotionCanonicalRepr.array)
+    multi_select = ("multi_select", NotionCanonicalRepr.multitags)
     number = ("number", NotionCanonicalRepr.number_r)
     people = ("people", NotionCanonicalRepr.person)
     phone_number = ("phone_number", NotionCanonicalRepr.string)
     relation = ("relation", NotionCanonicalRepr.relation_r)
     rich_text = ("rich_text", NotionCanonicalRepr.string)
     rollup = ("rollup", NotionCanonicalRepr.string)
-    select = ("select", NotionCanonicalRepr.string)
+    select = ("select", NotionCanonicalRepr.tag)
     status = ("status", NotionCanonicalRepr.string)
     title = ("title", NotionCanonicalRepr.string)
     unique_id = ("unique_id", NotionCanonicalRepr.number_r)
@@ -42,6 +44,9 @@ class NotionType(Enum):
 
     def __repr__(self) -> str:
         return self.value[0]
+
+    def as_notion_canonical_repr(self) -> NotionCanonicalRepr:
+        return self.value[1]
 
 
 def notion_type_from_str(val: str) -> NotionType:
@@ -73,16 +78,72 @@ def fix_empty_vals(val: Any) -> Any:
     return val
 
 
-def are_different(notion_val: Any, source_val: Any) -> bool:
-    if isinstance(notion_val, dt.datetime):
-        if source_val:
-            # Notion does not store sec/ms level, so, ignore it in comparisons
-            source_dt = dt.datetime.fromisoformat(source_val)
-            source_dt = source_dt.replace(second=0, microsecond=0)
-            if source_dt == notion_val.replace(second=0, microsecond=0):
-                return False
-            return True
-    return str(fix_empty_vals(notion_val)) != str(fix_empty_vals(source_val))
+def to_tag_escaped_lowcase(val: str) -> str:
+    if val is None:
+        return ""
+    return val.strip().lower()[0:100]
+
+
+# pylint: disable=R0911,R0912
+def any_to_notion_type(
+    notion_type: NotionCanonicalRepr, val: Any
+) -> Optional[Union[list[str], bool, dt.datetime, float, str]]:
+    if val is None or not str(val).strip():
+        return ""
+    if notion_type in [NotionCanonicalRepr.array]:
+        if not val:
+            return []
+        return list(set(sorted(map(str, val))))
+    if notion_type in [NotionCanonicalRepr.multitags]:
+        if not val:
+            return []
+        if isinstance(val, str):
+            val = val.split("\n")
+        assert isinstance(val, list)
+        return list(set(sorted(map(to_tag_escaped_lowcase, val))))
+    if notion_type in [NotionCanonicalRepr.tag]:
+        return to_tag_escaped_lowcase(val)
+    if notion_type in [NotionCanonicalRepr.boolean]:
+        if not val:
+            return False
+        if isinstance(val, str):
+            return val.lower() in ["t", "true", "y", "yes", "1"]
+        return bool(val)
+    if notion_type in [NotionCanonicalRepr.datetime]:
+        if isinstance(val, str):
+            val = dt.datetime.fromisoformat(val)
+        assert isinstance(val, dt.datetime), f"{val} should be a datetime"
+        # Notion does not support sec/ms granularity
+        return val.replace(second=0, microsecond=0)
+    if notion_type in [NotionCanonicalRepr.number_r]:
+        if "." in val:
+            return float(val)
+        return int(val)
+    assert notion_type in [
+        NotionCanonicalRepr.person,
+        NotionCanonicalRepr.relation_r,
+        NotionCanonicalRepr.string,
+    ]
+    return str(val)
+
+
+def are_different(
+    notion_type: NotionCanonicalRepr, notion_val: Any, source_val: Any
+) -> bool:
+    source_val_casted = any_to_notion_type(notion_type=notion_type, val=source_val)
+    if not notion_val and not source_val_casted:
+        return False
+    if notion_type == NotionCanonicalRepr.tag:
+        return to_tag_escaped_lowcase(notion_val) != source_val_casted
+    if notion_type == NotionCanonicalRepr.multitags:
+        if isinstance(notion_val, str):
+            notion_val = notion_val.split("\n")
+        assert isinstance(notion_val, list)
+        notion_source_to_compare = list(
+            set(sorted(map(to_tag_escaped_lowcase, notion_val)))
+        )
+        return notion_source_to_compare != source_val_casted
+    return fix_empty_vals(notion_val) != fix_empty_vals(source_val_casted)
 
 
 def truncate_large_value(val: T) -> Union[T, str]:
@@ -317,12 +378,3 @@ def serialize_canonical_from_source(
     if notion_type in [NotionType.select, NotionType.multi_select]:
         return "\n".join(map(lambda v: v[0:100].replace(",", "_"), val.split("\n")))
     return truncate_large_value(str(val))
-
-
-def read_canonical_from_notion(
-    notion_prop: dict[str, Any], notion_type: NotionType
-) -> Any:
-    serializer = serialization_readers.get(notion_type)
-    if serializer is None:
-        serializer = no_op
-    return serializer(notion_prop[notion_type.name])

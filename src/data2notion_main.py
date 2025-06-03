@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.0.16"
+__version__ = "1.1.0"
 
 __plugin_api_version__ = 1.0
 
@@ -443,7 +443,9 @@ class PageToRemove(NotionPageModification):
         self.title = title
 
     def __repr__(self) -> str:
-        return f"[DELETE] {self.page_id} {self.title}"
+        return (
+            f"[DELETE] https://notion.so/{self.page_id.replace('-', '')} {self.title}"
+        )
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
@@ -463,7 +465,7 @@ class PageToUpdate(NotionPageModification):
         changes = ",".join(
             [f"{kv[0]}=[{kv[1][0]} → {kv[1][1]}]" for kv in self.updates.items()]
         )
-        return f"[UPDATE] {self.page_id} {changes}"
+        return f"[UPDATE] https://notion.so/{self.page_id.replace('-', '')} {changes}"
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
@@ -487,8 +489,11 @@ class PageToAdd(NotionPageModification):
     def __init__(self, source_identifier: str, props_to_add: dict[str, str]):
         self.source_identifier = source_identifier
         self.props_to_add = props_to_add
+        self.page_id: Optional[str] = None
 
     def __repr__(self) -> str:
+        if self.page_id:
+            return f"[ADDED] https://notion.so/{self.page_id.replace('-', '')} from source id={self.source_identifier}"
         return f"[ADDING] from source id={self.source_identifier}"
 
     @retry_http()
@@ -499,9 +504,10 @@ class PageToAdd(NotionPageModification):
                 prop_type_str = notion_processor.db_info.properties[k]
                 prop_type = notion_type_from_str(prop_type_str)
                 payload[k] = {prop_type.name: convert_value_to_notion(prop_type, value)}
-            await notion_processor.notion.pages.create(
+            res = await notion_processor.notion.pages.create(
                 parent={"database_id": notion_processor.database_id}, properties=payload
             )
+            self.page_id = res.get("id")
         return str(self)
 
 
@@ -515,7 +521,12 @@ def find_diffs(
         assert v
         notion_val = notion_record.get_canonical(k)
         source_val = source_record.props.get(k, "")
-        if are_different(notion_val=notion_val, source_val=source_val):
+
+        if are_different(
+            notion_type=v.as_notion_canonical_repr(),
+            notion_val=notion_val,
+            source_val=source_val,
+        ):
             res[k] = (notion_val, source_val)
     return res
 
@@ -657,7 +668,7 @@ async def process_modification(
     page_modification: NotionPageModification,
     confirmations: list[NotionPageModification],
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
-) -> None:
+) -> Optional[NotionPageModification]:
     if isinstance(page_modification, PageToAdd):
         my_policy = notion_processor.apply_policies.add
     elif isinstance(page_modification, PageToUpdate):
@@ -669,12 +680,14 @@ async def process_modification(
     assert my_policy
     if my_policy == ApplyPolicy.APPLY:
         await queue.put(page_modification.apply_changes(notion_processor))
-    elif my_policy == ApplyPolicy.CONFIRM:
+        return page_modification
+    if my_policy == ApplyPolicy.CONFIRM:
         confirmations.append(page_modification)
-    elif my_policy == ApplyPolicy.IGNORE:
+        return page_modification
+    if my_policy == ApplyPolicy.IGNORE:
         stats.ignored_modifications.increment(0)
-    else:
-        raise ValueError("Unexpected ApplyPolicy" + my_policy)
+        return None
+    raise ValueError("Unexpected ApplyPolicy" + my_policy)
 
 
 def filter_by_type(
@@ -786,13 +799,15 @@ async def start_processing(
     async for page_modification in find_changes(
         plugin=plugin, notion_processor=notion_processor
     ):
-        updates += 1
-        await process_modification(
+        page_mod_processed = await process_modification(
             notion_processor=notion_processor,
             page_modification=page_modification,
             confirmations=confirmations,
             queue=queue,
         )
+        if page_mod_processed:
+            updates += 1
+            logger.debug("[CHANGE] %s", page_modification)
 
     with MyProgressBar(length=updates, label=f"Applying {updates} changes") as progress:
         await process_confirmations(
