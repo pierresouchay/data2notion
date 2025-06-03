@@ -2,6 +2,18 @@
 
 ## Upcoming
 
+## 1.1.0 - 2025-06-03
+
+PERF:
+
+- improve comparisons for multi-select booleans -> fewer updates
+- revamp translation of values from plugins
+
+FEAT:
+
+- when `--notion-log-level DEBUG` is used, display all changes
+- properly compute progression when using a policy with IGNORE
+
 ## 1.0.15 - 2025-05-21
 
 FIX:
