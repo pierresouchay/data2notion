@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __plugin_api_version__ = 1.0
 
@@ -76,11 +76,14 @@ class Statistic:
         return res
 
 
+# pylint: disable=R0902
 class Statistics:
     def __init__(self) -> None:
         self.load_plugins = Statistic("load_plugins")
         self.notion_records = Statistic("notion_records")
         self.source_records = Statistic("source_records")
+        self.partition_ignored_notion = Statistic("partition_ignored_notion")
+        self.partition_ignored_records = Statistic("partition_ignored_records")
         self.records_added = Statistic("record_added")
         self.records_removed = Statistic("records_removed")
         self.records_updated = Statistic("records_updated")
@@ -253,6 +256,7 @@ class NotionRecord:
                 )
             val = str(self.get_canonical(partition, ""))
             if not regex.match(val):
+                stats.partition_ignored_notion.increment(0)
                 return False
         return True
 
@@ -295,12 +299,14 @@ def truncate_chars(val: str, max_len: int) -> str:
 
 
 class NotionProcessor:
-    def __init__(self, database_id: str, notion_token: str):
+    def __init__(
+        self, database_id: str, notion_token: str, partitions: dict[str, re.Pattern]
+    ):
         self.notion = AsyncClient(auth=notion_token)
         self.database_id = database_id
         self.db_info = NotionDataBaseInfo({})
         self.apply_policies = ApplyPolicies()
-        self.partitions: dict[str, re.Pattern] = {}
+        self.partitions = partitions
 
     async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
@@ -351,6 +357,7 @@ class SourceRecordCanonical:
                 )
             res = self.props.get(partition, "")
             if not regexp.match(res):
+                stats.partition_ignored_records.increment(0)
                 return False
         return True
 
@@ -1028,7 +1035,9 @@ def main() -> int:
             async def run_all() -> None:
                 t0 = time.perf_counter()
                 notion_processor = NotionProcessor(
-                    ns.notion_database_id, ns.notion_token
+                    ns.notion_database_id,
+                    ns.notion_token,
+                    set_partitions_from_cmdline_flags(ns.partition),
                 )
 
                 if ns.mode == PluginMode.NOTION_TO_DATA:

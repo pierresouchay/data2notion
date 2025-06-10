@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.2.0 - 2025-06-10
+
+FIX:
+
+- make `--partition` option work again + added metrics to track ignored fields
+
 ## 1.1.0 - 2025-06-03
 
 PERF:
