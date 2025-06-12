@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __plugin_api_version__ = 1.0
 
@@ -252,13 +252,23 @@ class NotionRecord:
         for partition, regex in partitions.items():
             if partition not in self._props:
                 raise ValueError(
-                    f"Partition {partition} not in the NotionDB, possible fields: {list(sorted(self._props.keys()))}"
+                    f"Partition {partition} not in the NotionDB, possible fields: {list(sorted(self.props.keys()))}"
                 )
             val = str(self.get_canonical(partition, ""))
             if not regex.match(val):
                 stats.partition_ignored_notion.increment(0)
                 return False
         return True
+
+    def props_as_canonical(self) -> dict[str, Any]:
+        return {k: self.get_canonical(k) for k in self._props.keys()}
+
+    @property
+    def props(self) -> dict[str, Any]:
+        """
+        Accessor to the properties
+        """
+        return self._props
 
 
 def concat_plain_text(notion_structured_text: Iterable[dict[str, Any]]) -> str:
@@ -279,17 +289,80 @@ class NotionDataBaseInfo:
                     self.title = k
 
 
-class ApplyPolicy(str, Enum):
+class ApplyPolicyEnum(str, Enum):
     APPLY = "APPLY"
     CONFIRM = "CONFIRM"
     IGNORE = "IGNORE"
 
+    @classmethod
+    def from_val(cls, val: str) -> Optional["ApplyPolicyEnum"]:
+        if val == "APPLY":
+            return ApplyPolicyEnum.APPLY
+        if val == "CONFIRM":
+            return ApplyPolicyEnum.CONFIRM
+        if val == "IGNORE":
+            return ApplyPolicyEnum.IGNORE
+        return None
+
+
+def evaluate_bool_expressionsnotion_record(
+    page_modification: "NotionPageModification",
+    src: dict[str, Any],
+    notion: dict[str, Any],
+    eval_code: str,
+) -> ApplyPolicyEnum:
+    pol = ApplyPolicyEnum.from_val(eval_code)
+    if pol:
+        return pol
+
+    try:
+        res = eval(eval_code, None, {"src": src, "notion": notion})  # pylint: disable=eval-used
+        if res:
+            if isinstance(res, str):
+                pol = ApplyPolicyEnum.from_val(eval_code)
+                if pol:
+                    return pol
+            if not isinstance(res, bool):
+                raise NameError(
+                    f"{res} is not a bool, was {type(res)} as computed by {eval_code}"
+                )
+            return ApplyPolicyEnum.APPLY
+        return ApplyPolicyEnum.IGNORE
+    except NameError as err:
+        msg = f"Error evaluating '{eval_code}': {err}"
+        available_variables = ", ".join(
+            sorted(
+                list(map(lambda p: f'notion["{p}"]', notion.keys()))
+                + list(map(lambda p: f'src["{p}"]', src.keys()))
+            )
+        )
+        logger.warning(
+            "[WARN] IGNORING %s due to eval error: %s. Available variables=%s.",
+            str(page_modification),
+            msg,
+            available_variables,
+        )
+        # If the is an error, do not delete
+        return ApplyPolicyEnum.IGNORE
+
 
 class ApplyPolicies:
     def __init__(self) -> None:
-        self.update = ApplyPolicy.APPLY
-        self.add = ApplyPolicy.APPLY
-        self.remove = ApplyPolicy.APPLY
+        self.update = ApplyPolicyEnum.APPLY.name
+        self.add = ApplyPolicyEnum.APPLY.name
+        self.remove = ApplyPolicyEnum.APPLY.name
+
+    def eval_modification(
+        self,
+        page_modification: "NotionPageModification",
+    ) -> ApplyPolicyEnum:
+        if isinstance(page_modification, PageToAdd):
+            return page_modification.eval_if_applicable(self.add)
+        if isinstance(page_modification, PageToUpdate):
+            return page_modification.eval_if_applicable(self.update)
+        if isinstance(page_modification, PageToRemove):
+            return page_modification.eval_if_applicable(self.remove)
+        raise ValueError(f"Unexpected type: {type(page_modification)}")
 
 
 def truncate_chars(val: str, max_len: int) -> str:
@@ -341,6 +414,7 @@ class SourceRecordCanonical:
         fields_to_dump: dict[str, NotionType],
     ):
         self.source_identifier = source_record.source_identifier
+        self.source_record = source_record
         self.props: dict[str, Any] = {}
         for prop_name, notion_type in fields_to_dump.items():
             val = plugin.get_property_as_canonical_value(
@@ -352,8 +426,10 @@ class SourceRecordCanonical:
     def is_part_of_partitions(self, partitions: dict[str, re.Pattern]) -> bool:
         for partition, regexp in partitions.items():
             if partition not in self.props:
-                raise ValueError(
-                    f"Partition {partition} not in source records, possible ones: {list(sorted(self.props.keys()))}"
+                logger.warning(
+                    "Partition %s not in source records, possible ones: %s",
+                    partition,
+                    ",".join(sorted(self.props.keys())),
                 )
             res = self.props.get(partition, "")
             if not regexp.match(res):
@@ -437,6 +513,10 @@ class NotionPageModification:
     def modification_type(self) -> str:
         return self.__class__.__name__
 
+    @abstractmethod
+    def eval_if_applicable(self, eval_code: str) -> ApplyPolicyEnum:
+        pass
+
     @retry_http()
     @abstractmethod
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
@@ -445,13 +525,22 @@ class NotionPageModification:
 
 
 class PageToRemove(NotionPageModification):
-    def __init__(self, page_id: str, title: str):
+    def __init__(self, page_id: str, title: str, existing_record: NotionRecord):
         self.page_id = page_id
         self.title = title
+        self.existing_record = existing_record
 
     def __repr__(self) -> str:
         return (
             f"[DELETE] https://notion.so/{self.page_id.replace('-', '')} {self.title}"
+        )
+
+    def eval_if_applicable(self, eval_code: str) -> ApplyPolicyEnum:
+        return evaluate_bool_expressionsnotion_record(
+            self,
+            src={},
+            notion=self.existing_record.props_as_canonical(),
+            eval_code=eval_code,
         )
 
     @retry_http()
@@ -464,15 +553,31 @@ class PageToRemove(NotionPageModification):
 
 
 class PageToUpdate(NotionPageModification):
-    def __init__(self, page_id: str, updates: dict[str, tuple[Any, Any]]):
+    def __init__(
+        self,
+        page_id: str,
+        updates: dict[str, tuple[Any, Any]],
+        src: SourceRecord,
+        existing_record: NotionRecord,
+    ):
         self.page_id = page_id
         self.updates = updates
+        self.src = src
+        self.existing_record = existing_record
 
     def __repr__(self) -> str:
         changes = ",".join(
             [f"{kv[0]}=[{kv[1][0]} → {kv[1][1]}]" for kv in self.updates.items()]
         )
         return f"[UPDATE] https://notion.so/{self.page_id.replace('-', '')} {changes}"
+
+    def eval_if_applicable(self, eval_code: str) -> ApplyPolicyEnum:
+        return evaluate_bool_expressionsnotion_record(
+            self,
+            src=self.src.props,
+            notion=self.existing_record.props_as_canonical(),
+            eval_code=eval_code,
+        )
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
@@ -502,6 +607,11 @@ class PageToAdd(NotionPageModification):
         if self.page_id:
             return f"[ADDED] https://notion.so/{self.page_id.replace('-', '')} from source id={self.source_identifier}"
         return f"[ADDING] from source id={self.source_identifier}"
+
+    def eval_if_applicable(self, eval_code: str) -> ApplyPolicyEnum:
+        return evaluate_bool_expressionsnotion_record(
+            self, src=self.props_to_add, notion={}, eval_code=eval_code
+        )
 
     @retry_http()
     async def apply_changes(self, notion_processor: NotionProcessor) -> str:
@@ -608,9 +718,16 @@ async def find_changes(
                     fields_to_compare=fields_intersection,
                 )
                 if res:
-                    yield PageToUpdate(notion_rec.id, res)
+                    yield PageToUpdate(
+                        notion_rec.id,
+                        res,
+                        src=candidate.source_record,
+                        existing_record=notion_rec,
+                    )
             else:
-                yield PageToRemove(notion_rec.id, title=title)
+                yield PageToRemove(
+                    notion_rec.id, title=title, existing_record=notion_rec
+                )
     stats.notion_records.set(num_notion_records, time.perf_counter() - t0)
     logger.info(
         "Processed %d records from Notion in %.1fs",
@@ -676,22 +793,17 @@ async def process_modification(
     confirmations: list[NotionPageModification],
     queue: asyncio.Queue[Union[object, Coroutine[Any, Any, Any]]],
 ) -> Optional[NotionPageModification]:
-    if isinstance(page_modification, PageToAdd):
-        my_policy = notion_processor.apply_policies.add
-    elif isinstance(page_modification, PageToUpdate):
-        my_policy = notion_processor.apply_policies.update
-    elif isinstance(page_modification, PageToRemove):
-        my_policy = notion_processor.apply_policies.remove
-    else:
-        raise ValueError(f"Unexpected type: {type(page_modification)}")
+    my_policy = notion_processor.apply_policies.eval_modification(
+        page_modification=page_modification
+    )
     assert my_policy
-    if my_policy == ApplyPolicy.APPLY:
+    if my_policy == ApplyPolicyEnum.APPLY:
         await queue.put(page_modification.apply_changes(notion_processor))
         return page_modification
-    if my_policy == ApplyPolicy.CONFIRM:
+    if my_policy == ApplyPolicyEnum.CONFIRM:
         confirmations.append(page_modification)
         return page_modification
-    if my_policy == ApplyPolicy.IGNORE:
+    if my_policy == ApplyPolicyEnum.IGNORE:
         stats.ignored_modifications.increment(0)
         return None
     raise ValueError("Unexpected ApplyPolicy" + my_policy)
@@ -844,18 +956,11 @@ _LOGGER_LEVELS = ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]
 _STATS_IN_CONSOLE = "console"
 
 
-def change_behaviour_values() -> Iterable[str]:
-    for x in ApplyPolicy:
-        yield x.name
-
-
-def parse_change_behaviour(value: str) -> ApplyPolicy:
-    for x in ApplyPolicy:
+def parse_change_behaviour(value: str) -> str:
+    for x in ApplyPolicyEnum:
         if value.upper() == x.name.upper():
-            return x
-    raise KeyError(
-        f"{value} is not valid, must be any of {list(change_behaviour_values())}"
-    )
+            return x.name
+    return value
 
 
 def default_log_level() -> str:
@@ -953,29 +1058,28 @@ def main() -> int:
         help="Notion Database ID to sync with",
     )
 
+    help_on_policy = "(def: APPLY) APPLY|CONFIRM|IGNORE|<eval code returning bool>"
     write_to_notion_parser.add_argument(
         "--add-policy",
         action="store",
-        default=ApplyPolicy.APPLY,
-        help="What do on new rows when writting to Notion (default: APPLY)",
+        default=str(ApplyPolicyEnum.APPLY),
+        help=f"What do on new rows when writting to Notion {help_on_policy}",
         type=parse_change_behaviour,
-        choices=list(change_behaviour_values()),
     )
+
     write_to_notion_parser.add_argument(
         "--delete-policy",
         action="store",
-        default=ApplyPolicy.APPLY,
-        help="What do on deleted rows when writting to Notion (default: APPLY)",
+        default=str(ApplyPolicyEnum.APPLY),
+        help=f"What do on with deleted rows when writting to Notion {help_on_policy}",
         type=parse_change_behaviour,
-        choices=list(change_behaviour_values()),
     )
     write_to_notion_parser.add_argument(
         "--update-policy",
         action="store",
-        default=ApplyPolicy.APPLY,
-        help="What do on updated rows when writting to Notion (default: APPLY)",
+        default=str(ApplyPolicyEnum.APPLY),
+        help=f"What do on updated rows when writting to Notion {help_on_policy}",
         type=parse_change_behaviour,
-        choices=list(change_behaviour_values()),
     )
 
     input_subparsers = write_to_notion_parser.add_subparsers(
