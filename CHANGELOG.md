@@ -2,6 +2,19 @@
 
 ## Upcoming
 
+## 1.3.0 - 2025-06-12
+
+FEAT:
+
+- allow scripted evaluations for `--delete-policy`, `--update-policy` and `--add-policy`.
+  It used to allow: APPLY|IGNORE|CONFIRM values, but it can now evaluate some python expressions.
+  Such expression might return `True` or `"APPLY"` (APPLY), `"CONFIRM"` (CONFIRM) to ignore a change:
+  `"IGNORE"` or `False`. Both notion and records top be synchronized are supported, namespaced in dicts
+  called `notion` and `src`. Thus, checking attribute first_name from notion can be accessed that way:
+  `--delete-policy=notion["first_name"].startswith("crap")` to delete all entries starting with `crap`.
+  This opens very complex synchronizations mechanisms, more flexible than the `--partition` mechanism.
+
+
 ## 1.2.0 - 2025-06-10
 
 FIX:
