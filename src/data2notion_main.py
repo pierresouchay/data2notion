@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 __plugin_api_version__ = 1.0
 
@@ -322,6 +322,8 @@ def evaluate_bool_expressionsnotion_record(
                 pol = ApplyPolicyEnum.from_val(eval_code)
                 if pol:
                     return pol
+            if isinstance(res, ApplyPolicyEnum):
+                return res
             if not isinstance(res, bool):
                 raise NameError(
                     f"{res} is not a bool, was {type(res)} as computed by {eval_code}"

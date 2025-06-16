@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.3.1 - 2025-06-16
+
+FIX:
+
+- allow using a ApplyPolicyEnum for return code of a policy
+
 ## 1.3.0 - 2025-06-12
 
 FEAT:
