@@ -2,6 +2,12 @@
 
 ## Upcoming
 
+## 1.3.2 - 2025-11-08
+
+FIX:
+
+- Lock notion-client dependency to avoid API breakage
+
 ## 1.3.1 - 2025-06-16
 
 FIX:
