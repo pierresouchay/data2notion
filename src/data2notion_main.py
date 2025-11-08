@@ -276,17 +276,24 @@ def concat_plain_text(notion_structured_text: Iterable[dict[str, Any]]) -> str:
 
 
 class NotionDataBaseInfo:
-    def __init__(self, retrieve_db_info: dict[str, Any]):
+    def __init__(
+        self, retrieve_db_info: dict[str, Any], datasource_info: dict[str, Any]
+    ):
         self.properties: dict[str, str] = {}
-        self.title = concat_plain_text(retrieve_db_info.get("title", []))
+        self.title_of_database = concat_plain_text(retrieve_db_info.get("title", []))
         self.description = concat_plain_text(retrieve_db_info.get("description", []))
         self.url = retrieve_db_info.get("url", "")
-        for k, v in retrieve_db_info.get("properties", {}).items():
-            if k:
-                typ = v["type"]
-                self.properties[k] = typ
-                if typ == "title":
-                    self.title = k
+        self.title: Optional[str] = None
+        if "properties" in datasource_info:
+            for k, v in datasource_info["properties"].items():
+                if k:
+                    typ = v["type"]
+                    self.properties[k] = typ
+                    if typ == "title":
+                        self.title = k
+            assert self.title, (
+                f"prop of type title not found in any of {datasource_info['properties']}"
+            )
 
 
 class ApplyPolicyEnum(str, Enum):
@@ -379,17 +386,27 @@ class NotionProcessor:
     ):
         self.notion = AsyncClient(auth=notion_token)
         self.database_id = database_id
-        self.db_info = NotionDataBaseInfo({})
+        self.data_source_id: Optional[str] = None
+        self.db_info = NotionDataBaseInfo({}, {})
         self.apply_policies = ApplyPolicies()
         self.partitions = partitions
 
     async def read_db_props(self) -> None:
         db_info = await self.notion.databases.retrieve(database_id=self.database_id)
-        self.db_info = NotionDataBaseInfo(db_info)
+
+        if len(db_info["data_sources"]) != 1:
+            print(
+                "WARNING, don't know how to handle multiple datasource, using first one"
+            )
+        ds_id = db_info["data_sources"][0]["id"]
+        self.data_source_id = ds_id
+        datasource_info = await self.notion.data_sources.retrieve(data_source_id=ds_id)
+
+        self.db_info = NotionDataBaseInfo(db_info, datasource_info)
         print(
             "[START] Syncing",
             self.db_info.url,
-            truncate_chars(self.db_info.title, 32),
+            truncate_chars(self.db_info.title_of_database, 32),
             f"[{truncate_chars(self.db_info.description, 32)}]…",
             "ver",
             __version__,
@@ -398,7 +415,7 @@ class NotionProcessor:
     async def iterate_over_pages(self) -> AsyncGenerator[NotionRecord, None]:
         num_notion_records = 0
         async for rec in async_iterate_paginated_api(
-            self.notion.databases.query, database_id=self.database_id
+            self.notion.data_sources.query, data_source_id=self.data_source_id
         ):
             num_notion_records += 1
             assert isinstance(rec, dict)
