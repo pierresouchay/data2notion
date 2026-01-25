@@ -42,7 +42,7 @@ from data2notion.serialization import (
 logger = logging.getLogger("data2notion")
 
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 
 __plugin_api_version__ = 1.0
 

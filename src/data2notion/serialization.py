@@ -133,6 +133,18 @@ def are_different(
     source_val_casted = any_to_notion_type(notion_type=notion_type, val=source_val)
     if not notion_val and not source_val_casted:
         return False
+    if notion_type == NotionCanonicalRepr.datetime:
+        d1 = ""
+        d2 = ""
+        if notion_val:
+            assert isinstance(notion_val, dt.datetime)
+            d1 = notion_val.isoformat(timespec="minutes")
+        if source_val:
+            x = dt.datetime.fromisoformat(source_val)
+            if x.tzinfo is None:
+                x = x.replace(tzinfo=dt.timezone.utc)
+            d2 = x.isoformat(timespec="minutes")
+        return d1 != d2
     if notion_type == NotionCanonicalRepr.tag:
         return to_tag_escaped_lowcase(notion_val) != source_val_casted
     if notion_type == NotionCanonicalRepr.multitags:
@@ -194,9 +206,10 @@ def read_date(prop: Any) -> Any:
             f"prop is supposed to be a dict, but was {type(prop)}: {prop}"
         )
     assert prop["time_zone"] is None
-    if prop["start"]:
-        return dt.datetime.fromisoformat(prop["start"])
-    return prop["start"]
+    start: Optional[str] = prop.get("start", None)
+    if start and start != "Invalid DateTime":
+        return dt.datetime.fromisoformat(start)
+    return start
 
 
 def read_files(prop: Any) -> list[str]:
@@ -367,7 +380,7 @@ def basic_type_to_str(
     if isinstance(field, bool):
         return "true" if field else "false"
     if isinstance(field, (dt.datetime, dt.date)):
-        return field.isoformat()
+        return field.isoformat(timespec="seconds")
     return str(field)
 
 
